@@ -1,5 +1,6 @@
 import type { AuditTask, AuditIssue, CodeAnalysisResult } from "@/shared/types";
 import { api } from "@/shared/config/database";
+import { apiClient } from "@/shared/api/serverClient";
 
 // 导出 JSON 格式报告
 export async function exportToJSON(task: AuditTask, issues: AuditIssue[]) {
@@ -64,6 +65,22 @@ export async function exportToPDF(task: AuditTask, _issues: AuditIssue[]) {
     } catch (error) {
         console.error('Failed to export PDF:', error);
         throw new Error('PDF 导出失败，请稍后重试');
+    }
+}
+
+// 导出 SARIF 2.1.0 格式（后端生成，可选去重）
+export async function exportToSARIF(task: AuditTask, dedupe: boolean = true) {
+    try {
+        const response = await apiClient.get(`/tasks/${task.id}/report/sarif`, {
+            params: { dedupe },
+            responseType: "blob"
+        });
+        const blob = new Blob([response.data], { type: "application/sarif+json" });
+        const suffix = dedupe ? "-dedup" : "";
+        downloadBlob(blob, `audit-report-${task.id.slice(0, 8)}${suffix}-${Date.now()}.sarif.json`);
+    } catch (error) {
+        console.error("Failed to export SARIF:", error);
+        throw new Error("SARIF 导出失败，请稍后重试");
     }
 }
 

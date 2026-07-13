@@ -15,9 +15,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-import { FileJson, FileText, Download, Loader2, Terminal } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { FileJson, FileText, FileCode2, Download, Loader2, Terminal } from "lucide-react";
 import type { AuditTask, AuditIssue } from "@/shared/types";
-import { exportToJSON, exportToPDF } from "@/features/reports/services/reportExport";
+import { exportToJSON, exportToPDF, exportToSARIF } from "@/features/reports/services/reportExport";
 import { toast } from "sonner";
 
 interface ExportReportDialogProps {
@@ -27,7 +28,7 @@ interface ExportReportDialogProps {
     issues: AuditIssue[];
 }
 
-type ExportFormat = "json" | "pdf";
+type ExportFormat = "json" | "pdf" | "sarif";
 
 export default function ExportReportDialog({
     open,
@@ -36,6 +37,7 @@ export default function ExportReportDialog({
     issues
 }: ExportReportDialogProps) {
     const [selectedFormat, setSelectedFormat] = useState<ExportFormat>("pdf");
+    const [sarifDedupe, setSarifDedupe] = useState(true);
     const [isExporting, setIsExporting] = useState(false);
 
     const handleExport = async () => {
@@ -49,6 +51,10 @@ export default function ExportReportDialog({
                 case "pdf":
                     await exportToPDF(task, issues);
                     toast.success("PDF 报告已导出");
+                    break;
+                case "sarif":
+                    await exportToSARIF(task, sarifDedupe);
+                    toast.success(sarifDedupe ? "SARIF 报告已导出（去重）" : "SARIF 报告已导出");
                     break;
             }
             onOpenChange(false);
@@ -98,6 +104,30 @@ export default function ExportReportDialog({
                                     <div className="text-xs text-muted-foreground">专业报告，适合打印和分享</div>
                                 </div>
                             </Label>
+                        </div>
+                        <div className="p-4 border border-border rounded bg-muted/50">
+                            <div className="flex items-center space-x-3 cursor-pointer hover:bg-muted -m-4 p-4 rounded">
+                                <RadioGroupItem value="sarif" id="sarif" />
+                                <Label htmlFor="sarif" className="flex items-center gap-3 cursor-pointer flex-1">
+                                    <FileCode2 className="w-5 h-5 text-cyan-400" />
+                                    <div>
+                                        <div className="font-bold text-foreground">SARIF 2.1.0 格式</div>
+                                        <div className="text-xs text-muted-foreground">静态分析交换标准，兼容 GitHub Code Scanning / CI</div>
+                                    </div>
+                                </Label>
+                            </div>
+                            {selectedFormat === "sarif" && (
+                                <div className="mt-3 pt-3 border-t border-border flex items-center gap-2 pl-8">
+                                    <Checkbox
+                                        id="sarif-dedupe"
+                                        checked={sarifDedupe}
+                                        onCheckedChange={(v) => setSarifDedupe(v === true)}
+                                    />
+                                    <Label htmlFor="sarif-dedupe" className="text-xs text-muted-foreground cursor-pointer">
+                                        启用去重（合并相同 rule_id + 文件 + 代码指纹）
+                                    </Label>
+                                </div>
+                            )}
                         </div>
                     </RadioGroup>
 
