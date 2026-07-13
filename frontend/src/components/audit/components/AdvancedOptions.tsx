@@ -2,6 +2,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -9,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, GitPullRequest } from "lucide-react";
 import type { CreateAuditTaskForm } from "@/shared/types";
 
 interface AdvancedOptionsProps {
@@ -144,8 +145,74 @@ export default function AdvancedOptions({
         </div>
       </div>
 
+      {/* Diff-Scope 增量扫描 */}
+      <DiffScopeSection
+        diffFiles={scanConfig.diff_files}
+        onUpdate={onUpdate}
+      />
+
       {/* 分析深度说明 */}
       <DepthExplanation />
+    </div>
+  );
+}
+
+function DiffScopeSection({
+  diffFiles,
+  onUpdate,
+}: {
+  diffFiles?: string[];
+  onUpdate: (updates: Partial<CreateAuditTaskForm["scan_config"]>) => void;
+}) {
+  const value = (diffFiles ?? []).join("\n");
+  const count = diffFiles?.length ?? 0;
+
+  const handleChange = (raw: string) => {
+    const list = raw
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    onUpdate({ diff_files: list.length > 0 ? list : undefined });
+  };
+
+  return (
+    <div className="space-y-2 border-t-2 border-dashed border-border pt-4">
+      <div className="flex items-center justify-between">
+        <Label className="font-bold uppercase flex items-center gap-2">
+          <GitPullRequest className="w-4 h-4" />
+          Diff-Scope 增量扫描
+        </Label>
+        {count > 0 && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onUpdate({ diff_files: undefined })}
+            className="retro-btn bg-background text-red-600 hover:bg-red-50 h-8"
+          >
+            清空
+          </Button>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground font-bold">
+        {count > 0
+          ? `已配置 ${count} 个变更文件 — 仅对这些文件的告警会被保留`
+          : "留空表示全量扫描；填入变更文件列表可只保留这些文件的告警（CI/CD 场景）"}
+      </p>
+      <Textarea
+        value={value}
+        onChange={(e) => handleChange(e.target.value)}
+        placeholder={`每行一个文件路径，例如：\nsrc/api/user.py\nsrc/utils/auth.py`}
+        rows={4}
+        className="font-mono text-xs rounded-none border-2 border-border shadow-none focus:ring-0 focus-visible:ring-0 focus-visible:border-primary"
+      />
+      <p className="text-xs text-muted-foreground font-bold">
+        提示：CI 可通过{" "}
+        <code className="bg-amber-50 px-1 border border-border">
+          git diff --name-only origin/main...HEAD
+        </code>{" "}
+        生成此列表
+      </p>
     </div>
   );
 }
