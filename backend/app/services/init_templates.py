@@ -264,6 +264,120 @@ Please provide specific optimization suggestions and expected performance improv
 
 Please provide specific refactoring suggestions and code examples."""
     },
+    {
+        "name": "SpringBoot 安全审计",
+        "description": "专门针对 Spring Boot / Spring Cloud 项目的安全审计提示词",
+        "template_type": "system",
+        "is_default": False,
+        "sort_order": 10,
+        "variables": {"language": "Java", "framework": "SpringBoot", "code": "代码内容"},
+        "content_zh": """你是一个专业的 Spring Boot 安全审计专家。请专注于检测 Spring Boot / Spring Cloud 项目中的安全问题：
+
+【Spring 特定漏洞】
+- SpEL 注入（SpelExpressionParser.parseExpression 使用用户输入）
+- Actuator 未授权暴露（management.endpoints.web.exposure.include=*）
+- Spring Security 配置错误（CSRF 禁用、permitAll 滥用）
+- 批量赋值 / Mass Assignment（@RequestBody 缺少字段限制）
+- JPA / SQL 注入（createQuery 拼接用户输入）
+- CORS 配置错误（allowCredentials + allowedOrigins(*)）
+- Thymeleaf 模板注入
+- 不安全的反序列化（ObjectInputStream, XMLDecoder）
+- JNDI 注入（InitialContext.lookup）
+
+【通用 Java 漏洞】
+- SQL 注入、命令注入、XXE、SSRF
+- 文件上传漏洞、路径遍历
+- 硬编码密钥、弱加密算法
+- 敏感信息泄露（堆栈跟踪暴露到响应）
+
+请详细说明每个漏洞的风险等级、利用方式和 Spring Boot 特定的修复建议。""",
+        "content_en": """You are a professional Spring Boot security audit expert. Focus on detecting security issues in Spring Boot / Spring Cloud projects:
+
+【Spring-Specific Vulnerabilities】
+- SpEL Injection (SpelExpressionParser.parseExpression with user input)
+- Actuator Unauthorized Exposure (management.endpoints.web.exposure.include=*)
+- Spring Security Misconfiguration (CSRF disabled, permitAll abuse)
+- Mass Assignment (@RequestBody missing field restrictions)
+- JPA / SQL Injection (createQuery concatenating user input)
+- CORS Misconfiguration (allowCredentials + allowedOrigins(*))
+- Thymeleaf Template Injection
+- Insecure Deserialization (ObjectInputStream, XMLDecoder)
+- JNDI Injection (InitialContext.lookup)
+
+【General Java Vulnerabilities】
+- SQL Injection, Command Injection, XXE, SSRF
+- File Upload, Path Traversal
+- Hardcoded Secrets, Weak Cryptography
+- Sensitive Information Disclosure
+
+Please provide risk levels, exploitation methods, and Spring Boot-specific remediation advice."""
+    },
+    {
+        "name": "Vue / 前端安全审计",
+        "description": "专门针对 Vue / React / 前端项目的安全审计提示词",
+        "template_type": "system",
+        "is_default": False,
+        "sort_order": 11,
+        "variables": {"language": "JavaScript/TypeScript", "framework": "Vue/React", "code": "代码内容"},
+        "content_zh": """你是一个专业的前端安全审计专家。请专注于检测 Vue / React / Angular 项目中的安全问题：
+
+【XSS 漏洞】
+- v-html / dangerouslySetInnerHTML 渲染未过滤内容
+- innerHTML / outerHTML 直接赋值
+- eval() / new Function() / setTimeout(string) 执行动态代码
+
+【认证与路由】
+- 路由守卫绕过（beforeEach 中缺少权限检查）
+- Token 存储不安全（localStorage 存敏感 Token）
+- Cookie 未设置 HttpOnly / Secure / SameSite
+
+【请求安全】
+- Axios / Fetch URL 拼接用户输入（SSRF）
+- window.open() 使用未经验证的 URL
+- 请求拦截器中 Token 泄露
+
+【配置泄露】
+- .env 文件中 VITE_* / REACT_APP_* 存放密钥
+- 前端打包后仍可访问的敏感配置
+- source map 暴露源码结构
+
+【其他】
+- DOM Clobbing 攻击
+- Clickjacking（缺少 X-Frame-Options）
+- CSP 策略缺失
+- 第三方脚本未使用 SRI
+
+请详细说明每个漏洞的风险等级、利用方式和前端特定的修复建议。""",
+        "content_en": """You are a professional frontend security audit expert. Focus on detecting security issues in Vue / React / Angular projects:
+
+【XSS Vulnerabilities】
+- v-html / dangerouslySetInnerHTML rendering unfiltered content
+- innerHTML / outerHTML direct assignment
+- eval() / new Function() / setTimeout(string) executing dynamic code
+
+【Authentication & Routing】
+- Route guard bypass (missing auth check in beforeEach)
+- Insecure Token storage (localStorage for sensitive tokens)
+- Cookie missing HttpOnly / Secure / SameSite
+
+【Request Security】
+- Axios / Fetch URL concatenating user input (SSRF)
+- window.open() with unvalidated URL
+- Token leakage in request interceptors
+
+【Configuration Leakage】
+- VITE_* / REACT_APP_* storing secrets in .env
+- Sensitive configs accessible after build
+- Source map exposing source structure
+
+【Others】
+- DOM Clobbing attacks
+- Clickjacking (missing X-Frame-Options)
+- Missing CSP policy
+- Third-party scripts without SRI
+
+Please provide risk levels, exploitation methods, and frontend-specific remediation advice."""
+    },
 ]
 
 
@@ -517,6 +631,188 @@ SYSTEM_RULE_SETS = [
                 "severity": "medium",
                 "custom_prompt": "检查是否存在同步阻塞操作，应该使用异步方式",
                 "fix_suggestion": "使用异步I/O或多线程处理",
+            },
+        ]
+    },
+    {
+        "name": "SpringBoot 安全规则集",
+        "description": "针对 Spring Boot / Spring Cloud 项目的专用安全审计规则",
+        "language": "java",
+        "rule_type": "security",
+        "is_default": False,
+        "sort_order": 10,
+        "severity_weights": {"critical": 10, "high": 5, "medium": 2, "low": 1},
+        "rules": [
+            {
+                "rule_code": "SB001",
+                "name": "SpEL 注入",
+                "description": "检测 Spring Expression Language 注入漏洞",
+                "category": "security",
+                "severity": "critical",
+                "custom_prompt": "检查是否存在 SpEL 注入漏洞：SpelExpressionParser.parseExpression() 是否使用了用户输入，是否使用了危险的 StandardEvaluationContext",
+                "fix_suggestion": "使用 SimpleEvaluationContext 替代 StandardEvaluationContext，对用户输入进行严格校验",
+                "reference_url": "https://docs.spring.io/spring-framework/docs/current/reference/html/core.html#expressions",
+            },
+            {
+                "rule_code": "SB002",
+                "name": "Actuator 未授权暴露",
+                "description": "检测 Spring Boot Actuator 敏感端点暴露",
+                "category": "security",
+                "severity": "high",
+                "custom_prompt": "检查 application.properties / application.yml 中 management.endpoints.web.exposure.include 是否配置为 * 或包含 env、heapdump 等敏感端点",
+                "fix_suggestion": "仅暴露 health、info 等必要端点，使用独立端口或添加认证",
+                "reference_url": "https://docs.spring.io/spring-boot/docs/current/reference/html/actuator.html",
+            },
+            {
+                "rule_code": "SB003",
+                "name": "Spring Security 配置错误",
+                "description": "检测 Spring Security 的不安全配置",
+                "category": "security",
+                "severity": "high",
+                "custom_prompt": "检查 Spring Security 配置：是否禁用 CSRF、是否滥用 permitAll()、是否使用 httpBasic() 用于生产环境、Controller 是否缺少 @PreAuthorize",
+                "fix_suggestion": "启用 CSRF 防护，使用基于 Token 的认证替代 HTTP Basic，在 Controller 添加权限注解",
+                "reference_url": "https://docs.spring.io/spring-security/reference/",
+            },
+            {
+                "rule_code": "SB004",
+                "name": "批量赋值漏洞",
+                "description": "检测 Spring 中的 Mass Assignment 漏洞",
+                "category": "security",
+                "severity": "medium",
+                "custom_prompt": "检查 @RequestBody / @ModelAttribute 是否缺少 @Valid，实体类是否缺少字段白名单限制",
+                "fix_suggestion": "使用 DTO 模式，配合 @JsonView 或 @InitBinder 限制可绑定字段",
+                "reference_url": "https://cheatsheetseries.owasp.org/cheatsheets/Mass_Assignment_Cheat_Sheet.html",
+            },
+            {
+                "rule_code": "SB005",
+                "name": "JPA / SQL 注入",
+                "description": "检测 Spring Data JPA 中的 SQL 注入",
+                "category": "security",
+                "severity": "high",
+                "custom_prompt": "检查 createQuery、createNativeQuery、@Query 是否拼接了用户输入，是否使用了参数绑定",
+                "fix_suggestion": "使用 PreparedStatement 或 JPA 参数绑定 (?1, :param)",
+                "reference_url": "https://docs.spring.io/spring-data/jpa/docs/current/reference/html/",
+            },
+            {
+                "rule_code": "SB006",
+                "name": "CORS 配置错误",
+                "description": "检测过于宽松的 CORS 配置",
+                "category": "security",
+                "severity": "medium",
+                "custom_prompt": "检查 @CrossOrigin 或 CorsRegistry 是否允许所有来源 (*) 且同时允许凭证 (allowCredentials(true))",
+                "fix_suggestion": "使用 allowedOriginPatterns 或显式域名白名单，避免 * + allowCredentials 组合",
+                "reference_url": "https://docs.spring.io/spring-framework/docs/current/reference/html/web.html#mvc-cors",
+            },
+            {
+                "rule_code": "SB007",
+                "name": "不安全的反序列化",
+                "description": "检测 Java 原生反序列化漏洞",
+                "category": "security",
+                "severity": "critical",
+                "custom_prompt": "检查是否使用了 ObjectInputStream.readObject()、XMLDecoder、或 Jackson 的 enableDefaultTyping()",
+                "fix_suggestion": "使用 JSON 序列化替代 Java 原生序列化，使用白名单类过滤",
+                "reference_url": "https://cheatsheetseries.owasp.org/cheatsheets/Deserialization_Cheat_Sheet.html",
+            },
+            {
+                "rule_code": "SB008",
+                "name": "JNDI 注入",
+                "description": "检测 JNDI 查找中的注入漏洞",
+                "category": "security",
+                "severity": "critical",
+                "custom_prompt": "检查 InitialContext.lookup() 是否使用了用户输入，是否支持 ldap://、rmi:// 等协议",
+                "fix_suggestion": "禁用 JNDI 或严格限制协议白名单，升级到 Spring Boot 2.6.6+ / 2.7.x",
+                "reference_url": "https://spring.io/blog/2022/03/31/spring-framework-rce-early-announcement",
+            },
+        ]
+    },
+    {
+        "name": "Vue / 前端安全规则集",
+        "description": "针对 Vue / React / 前端项目的专用安全审计规则",
+        "language": "javascript",
+        "rule_type": "security",
+        "is_default": False,
+        "sort_order": 11,
+        "severity_weights": {"critical": 10, "high": 5, "medium": 2, "low": 1},
+        "rules": [
+            {
+                "rule_code": "FE001",
+                "name": "v-html / dangerouslySetInnerHTML XSS",
+                "description": "检测前端 XSS 漏洞",
+                "category": "security",
+                "severity": "high",
+                "custom_prompt": "检查是否使用了 v-html、dangerouslySetInnerHTML、innerHTML 渲染用户输入内容，是否使用了 DOMPurify 等净化库",
+                "fix_suggestion": "使用 v-text / {{}} 插值替代 v-html，如需富文本使用 DOMPurify 净化",
+                "reference_url": "https://vuejs.org/guide/best-practices/security.html#rule-no-1-never-use-non-trusted-html",
+            },
+            {
+                "rule_code": "FE002",
+                "name": "路由守卫绕过",
+                "description": "检测 Vue Router 权限校验缺失",
+                "category": "security",
+                "severity": "medium",
+                "custom_prompt": "检查 router.beforeEach / beforeEnter 中是否对所有受保护路由进行了权限校验，是否存在无条件 next()",
+                "fix_suggestion": "为所有需要认证的路由添加权限检查，使用 meta 字段标记路由权限",
+                "reference_url": "https://router.vuejs.org/guide/advanced/navigation-guards.html",
+            },
+            {
+                "rule_code": "FE003",
+                "name": "Token 存储不安全",
+                "description": "检测前端敏感 Token 存储方式",
+                "category": "security",
+                "severity": "medium",
+                "custom_prompt": "检查是否使用 localStorage / sessionStorage 存储 JWT Token 或其他敏感凭证",
+                "fix_suggestion": "使用 HttpOnly Cookie 存储 Token，避免 XSS 时被盗取",
+                "reference_url": "https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#local-storage",
+            },
+            {
+                "rule_code": "FE004",
+                "name": "前端环境变量泄露",
+                "description": "检测 .env 中敏感信息泄露",
+                "category": "security",
+                "severity": "medium",
+                "custom_prompt": "检查 .env / .env.production 中是否有 VITE_*、REACT_APP_* 开头的密钥、密码、Token",
+                "fix_suggestion": "前端环境变量会打包到客户端，不可存放任何密钥。敏感操作应在后端完成",
+                "reference_url": "https://vitejs.dev/guide/env-and-mode.html",
+            },
+            {
+                "rule_code": "FE005",
+                "name": "eval / Function 代码注入",
+                "description": "检测前端动态代码执行",
+                "category": "security",
+                "severity": "high",
+                "custom_prompt": "检查是否使用了 eval()、new Function()、setTimeout(string)、setInterval(string) 执行动态字符串",
+                "fix_suggestion": "使用 JSON.parse 替代 eval，使用箭头函数替代字符串形式的 setTimeout",
+                "reference_url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval",
+            },
+            {
+                "rule_code": "FE006",
+                "name": "Clickjacking 防护缺失",
+                "description": "检测前端缺少点击劫持防护",
+                "category": "security",
+                "severity": "medium",
+                "custom_prompt": "检查后端是否返回 X-Frame-Options 或 CSP frame-ancestors 响应头",
+                "fix_suggestion": "添加 X-Frame-Options: DENY 或 SAMEORIGIN，配置 CSP frame-ancestors",
+                "reference_url": "https://cheatsheetseries.owasp.org/cheatsheets/Clickjacking_Defense_Cheat_Sheet.html",
+            },
+            {
+                "rule_code": "FE007",
+                "name": "CSP 策略缺失",
+                "description": "检测 Content Security Policy 缺失",
+                "category": "security",
+                "severity": "low",
+                "custom_prompt": "检查是否配置了 Content-Security-Policy 响应头或 meta 标签",
+                "fix_suggestion": "配置 CSP 策略，限制脚本、样式、图片等资源的加载来源",
+                "reference_url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP",
+            },
+            {
+                "rule_code": "FE008",
+                "name": "第三方脚本无 SRI",
+                "description": "检测 CDN 脚本缺少完整性校验",
+                "category": "security",
+                "severity": "low",
+                "custom_prompt": "检查通过 CDN 加载的脚本是否使用了 integrity 属性（Subresource Integrity）",
+                "fix_suggestion": "为所有外部脚本添加 integrity 和 crossorigin 属性",
+                "reference_url": "https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity",
             },
         ]
     },

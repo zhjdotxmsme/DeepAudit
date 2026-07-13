@@ -220,7 +220,11 @@ from .system_prompts import (
     VULNERABILITY_PRIORITIES,
     TOOL_USAGE_GUIDE,
     MULTI_AGENT_RULES,
+    SPRINGBOOT_AUDIT_PROMPT,
+    VUE_AUDIT_PROMPT,
+    JAVA_AUDIT_PROMPT,
     build_enhanced_prompt,
+    build_framework_prompt,
 )
 
 
@@ -239,6 +243,10 @@ __all__ = [
     "VULNERABILITY_PRIORITIES",
     "TOOL_USAGE_GUIDE",
     "MULTI_AGENT_RULES",
+    "SPRINGBOOT_AUDIT_PROMPT",
+    "VUE_AUDIT_PROMPT",
+    "JAVA_AUDIT_PROMPT",
     "build_enhanced_prompt",
+    "build_framework_prompt",
 ]
 

@@ -125,6 +125,17 @@ class SemgrepTool(AgentTool):
         "p/sql-injection",
         "p/xss",
         "p/command-injection",
+        # 🔥 新增框架专用规则集
+        "p/spring",
+        "p/react",
+        "p/vue",
+        "p/angular",
+        "p/django",
+        "p/flask",
+        "p/fastapi",
+        "p/nodejs",
+        "p/cwe-top-25",
+        "p/ci",
     ]
     
     def __init__(self, project_root: str, sandbox_manager: Optional["SandboxManager"] = None):
@@ -151,12 +162,31 @@ Semgrep 是业界领先的静态分析工具，支持 30+ 种编程语言。
 可用规则集:
 - p/security-audit: 综合安全审计（推荐）
 - p/owasp-top-ten: OWASP Top 10 漏洞检测
+- p/cwe-top-25: CWE Top 25 漏洞检测
 - p/secrets: 密钥泄露检测
 - p/sql-injection: SQL 注入检测
+- p/java: Java 通用规则
+- p/spring: Spring/SpringBoot 框架规则
+- p/javascript: JavaScript 规则
+- p/typescript: TypeScript 规则
+- p/vue: Vue 框架规则
+- p/react: React 框架规则
+- p/nodejs: Node.js 规则
+- p/python: Python 规则
+- p/django: Django 框架规则
+- p/flask: Flask 框架规则
+- p/fastapi: FastAPI 框架规则
 
 使用场景:
 - 快速全面的代码安全扫描
-- 检测常见安全漏洞模式"""
+- 检测常见安全漏洞模式
+- 框架特定漏洞检测（SpringBoot/Vue等）
+
+💡 最佳实践:
+- Java/SpringBoot 项目: 使用 "p/security-audit,p/java,p/spring,p/owasp-top-ten"
+- Vue/前端项目: 使用 "p/security-audit,p/javascript,p/typescript,p/vue,p/xss"
+- Python 项目: 使用 "p/security-audit,p/python,p/owasp-top-ten"
+- 也可以组合多个规则集，用逗号分隔"""
     
     @property
     def args_schema(self):

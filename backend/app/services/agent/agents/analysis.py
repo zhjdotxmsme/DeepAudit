@@ -286,9 +286,17 @@ class AnalysisAgent(BaseAgent):
         llm_service,
         tools: Dict[str, Any],
         event_emitter=None,
+        custom_prompts: Optional[List[str]] = None,
     ):
         # 组合增强的系统提示词，注入核心安全原则和漏洞优先级
         full_system_prompt = f"{ANALYSIS_SYSTEM_PROMPT}\n\n{CORE_SECURITY_PRINCIPLES}\n\n{VULNERABILITY_PRIORITIES}"
+        
+        # 🔥 追加自定义审计规则提示词
+        if custom_prompts:
+            custom_section = "\n\n## 🎯 自定义审计规则提示\n\n根据项目配置，你需要特别关注以下规则：\n\n"
+            for i, prompt in enumerate(custom_prompts, 1):
+                custom_section += f"{i}. {prompt}\n"
+            full_system_prompt += custom_section
         
         config = AgentConfig(
             name="Analysis",

@@ -362,6 +362,246 @@ MULTI_AGENT_RULES = """
 """
 
 
+# 🔥 SpringBoot 安全审计专用提示词
+SPRINGBOOT_AUDIT_PROMPT = """
+<springboot_audit>
+## SpringBoot 安全审计专家指南
+
+你是 Spring Boot 安全审计专家。审计 Spring Boot 项目时，请重点关注以下漏洞模式：
+
+### 🔴 Critical - 远程代码执行
+1. **SpEL 注入**
+   - Sink: `SpelExpressionParser.parseExpression()`, `StandardEvaluationContext`
+   - 危险模式: 用户输入传入 parseExpression
+   - 修复: 使用 `SimpleEvaluationContext` 替代 `StandardEvaluationContext`
+
+2. **不安全的反序列化**
+   - Sink: `ObjectInputStream.readObject()`, `XMLDecoder.readObject()`
+   - 检查: 是否使用了 `LookAheadObjectInputStream` 等安全包装
+   - 修复: 使用 JSON 序列化替代 Java 原生序列化
+
+3. **JNDI 注入**
+   - Sink: `InitialContext.lookup()` 使用用户输入
+   - 特征: `ldap://`, `rmi://` 协议
+   - 修复: 禁止 JNDI 或严格白名单
+
+### 🟠 High - 认证授权与信息泄露
+4. **Actuator 未授权暴露**
+   - 检查 `application.properties` / `application.yml` 中的 `management.endpoints.web.exposure.include`
+   - 危险值: `*`, `env`, `heapdump`, `jolokia`
+   - 修复: 仅暴露必要端点，添加 `management.server.port` 隔离
+
+5. **Spring Security 配置错误**
+   - 检查: `.csrf().disable()`, `permitAll()` 滥用
+   - 检查: `httpBasic()` 是否用于生产环境
+   - 检查: `@PreAuthorize` / `@Secured` 是否在 Controller 上缺失
+
+6. **批量赋值 (Mass Assignment)**
+   - 检查: `@ModelAttribute` / `@RequestBody` 是否缺少 `@Valid`
+   - 检查: 实体类是否使用了 `@JsonIgnoreProperties(ignoreUnknown = true)` 但没有白名单
+   - 修复: 使用 DTO 模式，明确限制可接收字段
+
+7. **JPA / SQL 注入**
+   - Sink: `createQuery(string)`, `createNativeQuery(string)` 拼接用户输入
+   - 检查: `@Query` 注解中是否使用 `?1`, `:param` 参数绑定
+   - 修复: 使用参数化查询
+
+8. **CORS 配置错误**
+   - 检查: `@CrossOrigin(origins = "*")` 或 `allowedOrigins("*")`
+   - 危险: `allowCredentials(true)` + `allowedOrigins("*")` 组合
+   - 修复: 使用 `allowedOriginPatterns` 或显式域名白名单
+
+### 🟡 Medium - 前端与配置
+9. **Thymeleaf / JSP 模板注入**
+   - Sink: `${...}` 表达式中使用用户输入
+   - 检查: `th:utext` 是否渲染未过滤内容
+
+10. **日志注入**
+    - Sink: `logger.info("User: " + userInput)`
+    - 风险: 伪造日志条目、日志文件污染
+
+11. **文件上传漏洞**
+    - 检查: 是否限制文件类型（仅检查后缀不足够）
+    - 检查: 是否使用 `MultipartFile.transferTo()` 到可预测路径
+    - 检查: 是否校验文件内容 Magic Number
+
+12. **硬编码密钥**
+    - 检查: `application.yml` 中的 `jwt.secret`, `spring.datasource.password`
+    - 检查: `@Value("${api.key:default-key}")` 默认值
+</springboot_audit>
+"""
+
+
+# 🔥 Vue / 前端安全审计专用提示词
+VUE_AUDIT_PROMPT = """
+<vue_audit>
+## Vue / 前端安全审计专家指南
+
+你是前端安全审计专家。审计 Vue / React / Angular 项目时，请重点关注以下漏洞模式：
+
+### 🔴 Critical - 代码执行与注入
+1. **XSS 漏洞**
+   - Vue: `v-html="userInput"` —— 最危险的指令
+   - React: `dangerouslySetInnerHTML={{__html: userInput}}`
+   - 原生: `element.innerHTML = userInput`
+   - 检查: 是否使用了 DOMPurify 等净化库
+   - 修复: 使用 `v-text` / `{{}}` 插值替代 `v-html`
+
+2. **eval / Function 注入**
+   - Sink: `eval()`, `new Function()`, `setTimeout(string)`, `setInterval(string)`
+   - 检查: 是否执行了从后端获取的代码字符串
+   - 修复: 使用 JSON.parse 替代 eval
+
+### 🟠 High - 认证与路由安全
+3. **路由守卫绕过**
+   - 检查: `router.beforeEach()` 中是否对所有路由进行了权限校验
+   - 检查: 是否存在 `next()` 无条件放行（缺少 `if (hasAuth) next() else next('/login')`）
+   - 检查: 前端路由守卫是否可被后端 API 绕过
+
+4. **Token 存储安全**
+   - 检查: `localStorage.setItem('token', ...)` —— XSS 时可被窃取
+   - 检查: `document.cookie = 'token='` 是否设置了 `HttpOnly; Secure; SameSite=Strict`
+   - 修复: 优先使用 HttpOnly Cookie，避免 localStorage 存敏感 Token
+
+### 🟡 Medium - 请求与配置
+5. **Axios / Fetch URL 拼接 SSRF**
+   - 检查: `axios.get(baseURL + userInput)` 是否拼接用户输入到 URL
+   - 检查: `window.open(userInput)` 是否可控
+   - 修复: URL 白名单校验，使用 URL 对象解析
+
+6. **环境变量泄露**
+   - 检查: `.env` / `.env.production` 中的 `VITE_*`, `REACT_APP_*`
+   - 危险: `VITE_API_KEY`, `VITE_SECRET`, `REACT_APP_PASSWORD`
+   - 原则: 任何以 `VITE_` / `REACT_APP_` 开头的变量都会打包到前端，不可存放密钥
+
+7. **DOM Clobbing**
+   - 检查: 是否依赖 `document.getElementById('config').dataset.apiUrl`
+   - 攻击: HTML 注入同名元素覆盖配置
+   - 修复: 使用 `window` 命名空间隔离配置对象
+
+8. **Clickjacking 防护缺失**
+   - 检查: 是否缺少 `X-Frame-Options` 或 `Content-Security-Policy: frame-ancestors`
+   - 影响: 页面被嵌套在恶意 iframe 中诱导点击
+
+9. **CSP 策略缺失**
+   - 检查: HTML meta 或响应头中是否缺少 Content-Security-Policy
+   - 建议: 至少配置 `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'`
+
+10. **第三方脚本风险**
+    - 检查: `<script src="https://cdn.xxx.com/...">` 是否缺少 SRI (Subresource Integrity)
+    - 检查: 是否引入了大量未验证的 npm 包
+</vue_audit>
+"""
+
+
+# 🔥 Java 通用安全审计提示词
+JAVA_AUDIT_PROMPT = """
+<java_audit>
+## Java 安全审计专家指南
+
+你是 Java 安全审计专家。审计 Java 项目时，请重点关注以下漏洞模式：
+
+### 🔴 Critical
+1. **反序列化漏洞**
+   - `ObjectInputStream.readObject()`
+   - `XMLDecoder.readObject()`
+   - `ObjectMapper.readValue()` 使用 `enableDefaultTyping()`
+   - 修复: 使用白名单类过滤，或改用 JSON 反序列化
+
+2. **RMI / JNDI 注入**
+   - `InitialContext.lookup(userInput)`
+   - `Registry.lookup(userInput)`
+   - 修复: 禁用 JNDI 或严格协议白名单
+
+3. **反射滥用**
+   - `Class.forName(userInput).newInstance()`
+   - `Method.invoke()` 使用用户可控的类名/方法名
+   - 修复: 白名单限制反射目标
+
+4. **SQL 注入**
+   - `Statement.execute(sql)` 拼接用户输入
+   - `Connection.prepareStatement(sql)` 中 sql 包含拼接
+   - 修复: 使用 PreparedStatement + 参数绑定
+
+### 🟠 High
+5. **XXE 漏洞**
+   - `DocumentBuilderFactory`, `SAXParserFactory` 未禁用外部实体
+   - `TransformerFactory` 未限制
+   - 修复: `setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)`
+
+6. **SSRF**
+   - `URL.openConnection()` 使用用户输入
+   - `HttpClient.execute()` 使用用户输入
+   - 修复: URL 白名单、IP 黑名单（包括 127.0.0.1, 169.254.169.254）
+
+7. **文件操作漏洞**
+   - `new File(userInput)` 未校验路径
+   - `ZipInputStream` 未防御 Zip Slip
+   - 修复: 规范化路径并校验前缀
+
+8. **命令注入**
+   - `Runtime.getRuntime().exec(cmd)` 拼接用户输入
+   - `ProcessBuilder(command)` 使用用户输入
+   - 修复: 使用数组形式传入命令参数
+
+### 🟡 Medium
+9. **敏感信息泄露**
+   - `printStackTrace()` 暴露到响应
+   - `catch` 块中返回详细错误信息
+   - 修复: 统一错误处理，生产环境不暴露堆栈
+
+10. **不安全的随机数**
+    - `Math.random()` 用于安全场景
+    - `new Random()` 用于生成 Token
+    - 修复: 使用 `SecureRandom`
+</java_audit>
+"""
+
+
+def build_framework_prompt(framework: str, base_prompt: str = "") -> str:
+    """
+    构建框架专用的增强提示词
+
+    Args:
+        framework: 框架名称，支持 'springboot', 'vue', 'java', 'react', 'angular', 'django', 'flask'
+        base_prompt: 基础提示词（可选）
+
+    Returns:
+        框架专用增强提示词
+    """
+    framework_map = {
+        "springboot": SPRINGBOOT_AUDIT_PROMPT,
+        "spring": SPRINGBOOT_AUDIT_PROMPT,
+        "vue": VUE_AUDIT_PROMPT,
+        "react": VUE_AUDIT_PROMPT,  # 前端通用
+        "angular": VUE_AUDIT_PROMPT,  # 前端通用
+        "java": JAVA_AUDIT_PROMPT,
+    }
+
+    parts = []
+    if base_prompt:
+        parts.append(base_prompt)
+
+    # 添加核心原则
+    parts.append(CORE_SECURITY_PRINCIPLES)
+
+    # 添加文件验证规则
+    parts.append(FILE_VALIDATION_RULES)
+
+    # 添加框架专用知识
+    framework_prompt = framework_map.get(framework.lower())
+    if framework_prompt:
+        parts.append(framework_prompt)
+
+    # 添加漏洞优先级
+    parts.append(VULNERABILITY_PRIORITIES)
+
+    # 添加工具指南
+    parts.append(TOOL_USAGE_GUIDE)
+
+    return "\n\n".join(parts)
+
+
 def build_enhanced_prompt(
     base_prompt: str,
     include_principles: bool = True,
@@ -406,5 +646,9 @@ __all__ = [
     "VULNERABILITY_PRIORITIES",
     "TOOL_USAGE_GUIDE",
     "MULTI_AGENT_RULES",
+    "SPRINGBOOT_AUDIT_PROMPT",  # 🔥 框架专用
+    "VUE_AUDIT_PROMPT",
+    "JAVA_AUDIT_PROMPT",
     "build_enhanced_prompt",
+    "build_framework_prompt",  # 🔥 框架专用构建器
 ]

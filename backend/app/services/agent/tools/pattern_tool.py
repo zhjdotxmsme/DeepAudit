@@ -297,6 +297,171 @@ class PatternMatchTool(AgentTool):
             "description": "弱加密算法：使用了不安全的加密或哈希算法",
             "cwe_id": "CWE-327",
         },
+        
+        # SpringBoot 特定漏洞模式
+        "springboot_speL_injection": {
+            "patterns": {
+                "java": [
+                    (r'SpelExpressionParser.*parseExpression\s*\(', "SpEL表达式解析"),
+                    (r'ExpressionParser.*parseExpression\s*\([^)]*\+', "SpEL拼接注入"),
+                    (r'StandardEvaluationContext', "SpEL标准上下文（危险）"),
+                    (r'@Value\s*\(\s*"[^"]*\$\{', "@Value SpEL表达式"),
+                ],
+            },
+            "severity": "critical",
+            "description": "Spring SpEL注入：用户输入被解析为SpEL表达式，可导致远程代码执行",
+            "cwe_id": "CWE-917",
+        },
+        
+        "springboot_actuator_exposure": {
+            "patterns": {
+                "java": [
+                    (r'management\.endpoints\.web\.exposure\.include\s*=\s*\*', "Actuator全部暴露"),
+                    (r'management\.endpoints\.web\.exposure\.include\s*=\s*["\'][^"\']*env[^"\']*["\']', "Actuator env暴露"),
+                    (r'management\.endpoints\.web\.exposure\.include\s*=\s*["\'][^"\']*heapdump[^"\']*["\']', "Actuator heapdump暴露"),
+                ],
+                "yaml": [
+                    (r'exposure:\s*\n\s*include:\s*\*', "YAML Actuator全部暴露"),
+                    (r'include:\s*["\']?\*["\']?', "YAML Actuator全部暴露"),
+                ],
+                "properties": [
+                    (r'management\.endpoints\.web\.exposure\.include=\*', "Properties Actuator全部暴露"),
+                ],
+            },
+            "severity": "high",
+            "description": "Spring Boot Actuator未授权暴露：生产环境暴露敏感端点（env、heapdump等）可导致信息泄露",
+            "cwe_id": "CWE-200",
+        },
+        
+        "springboot_security_bypass": {
+            "patterns": {
+                "java": [
+                    (r'@PreAuthorize\s*\(\s*["\']\s*permitAll', "PreAuthorize permitAll"),
+                    (r'\.antMatchers\s*\(\s*["\'][^"\']*["\']\s*\)\.permitAll\s*\(\)', "Spring Security permitAll"),
+                    (r'\.csrf\s*\(\s*\)\.disable\s*\(\)', "CSRF防护禁用"),
+                    (r'httpBasic\s*\(\)', "HTTP Basic认证（弱）"),
+                ],
+            },
+            "severity": "high",
+            "description": "Spring Security配置缺陷：错误的权限配置或禁用安全机制",
+            "cwe_id": "CWE-306",
+        },
+        
+        "springboot_mass_assignment": {
+            "patterns": {
+                "java": [
+                    (r'@ModelAttribute.*[^@]Valid', "ModelAttribute缺少Valid"),
+                    (r'@RequestBody\s+\w+\s+\w+[^@]*[^V]alid', "RequestBody缺少@Valid"),
+                    (r'BindingResult', "数据绑定（检查是否有限制字段）"),
+                ],
+            },
+            "severity": "medium",
+            "description": "Spring Boot批量赋值：缺少字段限制导致攻击者修改敏感字段",
+            "cwe_id": "CWE-915",
+        },
+        
+        "springboot_jpa_injection": {
+            "patterns": {
+                "java": [
+                    (r'createQuery\s*\([^,)]*\+', "JPA查询拼接"),
+                    (r'createNativeQuery\s*\([^,)]*\+', "Native查询拼接"),
+                    (r'@Query\s*\(\s*value\s*=\s*["\'][^"\']*\+', "@Query注解拼接"),
+                ],
+            },
+            "severity": "high",
+            "description": "Spring Data JPA注入：JPQL/SQL查询中拼接用户输入",
+            "cwe_id": "CWE-89",
+        },
+        
+        "springboot_cors_misconfig": {
+            "patterns": {
+                "java": [
+                    (r'@CrossOrigin\s*\(\s*origins\s*=\s*["\']\*["\']', "CORS允许所有来源"),
+                    (r'\.allowedOrigins\s*\(\s*["\']\*["\']', "CORS配置允许所有来源"),
+                    (r'\.allowCredentials\s*\(\s*true\s*\)', "CORS允许凭证"),
+                ],
+            },
+            "severity": "medium",
+            "description": "Spring CORS配置错误：过于宽松的跨域配置可能导致安全问题",
+            "cwe_id": "CWE-942",
+        },
+        
+        # Vue / 前端特定漏洞模式
+        "vue_xss": {
+            "patterns": {
+                "javascript": [
+                    (r'v-html\s*=', "Vue v-html XSS"),
+                    (r'dangerouslySetInnerHTML', "React dangerouslySetInnerHTML"),
+                    (r'\.innerHTML\s*=', "原生innerHTML赋值"),
+                ],
+                "vue": [
+                    (r'v-html\s*=', "Vue v-html指令"),
+                ],
+            },
+            "severity": "high",
+            "description": "Vue XSS漏洞：使用v-html或innerHTML渲染未过滤的用户输入",
+            "cwe_id": "CWE-79",
+        },
+        
+        "vue_router_bypass": {
+            "patterns": {
+                "javascript": [
+                    (r'router\.beforeEach\s*\(', "路由守卫"),
+                    (r'beforeEnter\s*\(', "路由进入守卫"),
+                    (r'next\s*\(\s*\)', "next()无权限检查"),
+                ],
+                "vue": [
+                    (r'<router-view', "路由视图"),
+                ],
+            },
+            "severity": "medium",
+            "description": "Vue路由守卫绕过：路由守卫中缺少权限校验或逻辑错误",
+            "cwe_id": "CWE-306",
+        },
+        
+        "vue_env_leak": {
+            "patterns": {
+                "javascript": [
+                    (r'VITE_.*_(KEY|SECRET|TOKEN|PASSWORD)', "Vite环境变量泄露"),
+                    (r'REACT_APP_.*_(KEY|SECRET|TOKEN)', "React环境变量泄露"),
+                    (r'process\.env\..*_(KEY|SECRET|TOKEN)', "Node环境变量泄露"),
+                ],
+                "vue": [
+                    (r'VITE_.*_(KEY|SECRET|TOKEN|PASSWORD)', "Vue环境变量泄露"),
+                ],
+            },
+            "severity": "medium",
+            "description": "前端环境变量泄露：敏感密钥暴露在前端代码中",
+            "cwe_id": "CWE-798",
+        },
+        
+        "frontend_ssrf": {
+            "patterns": {
+                "javascript": [
+                    (r'axios\.(get|post|put|delete)\s*\([^)]*\+', "Axios URL拼接"),
+                    (r'fetch\s*\([^)]*\+', "fetch URL拼接"),
+                    (r'new\s+XMLHttpRequest.*open\s*\([^)]*\+', "XHR URL拼接"),
+                    (r'baseURL\s*[=:]\s*[^;]+\+', "baseURL动态拼接"),
+                ],
+            },
+            "severity": "medium",
+            "description": "前端SSRF/请求劫持：前端请求URL动态拼接用户输入",
+            "cwe_id": "CWE-918",
+        },
+        
+        "vue_eval_injection": {
+            "patterns": {
+                "javascript": [
+                    (r'eval\s*\(', "eval()执行"),
+                    (r'new\s+Function\s*\(', "Function构造器"),
+                    (r'setTimeout\s*\(\s*["\']', "setTimeout字符串"),
+                    (r'setInterval\s*\(\s*["\']', "setInterval字符串"),
+                ],
+            },
+            "severity": "high",
+            "description": "前端代码注入：使用eval或Function执行动态字符串",
+            "cwe_id": "CWE-94",
+        },
     }
     
     @property
@@ -496,6 +661,18 @@ class PatternMatchTool(AgentTool):
         for ext, lang in ext_map.items():
             if file_path.lower().endswith(ext):
                 return lang
+        
+        # Vue 单文件组件
+        if file_path.lower().endswith('.vue'):
+            return "vue"
+        
+        # YAML 配置文件
+        if file_path.lower().endswith(('.yaml', '.yml')):
+            return "yaml"
+        
+        # Properties 配置文件
+        if file_path.lower().endswith('.properties'):
+            return "properties"
         
         return None
 
