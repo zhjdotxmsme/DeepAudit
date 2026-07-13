@@ -5,6 +5,7 @@ from .audit import AuditTask, AuditIssue
 from .analysis import InstantAnalysis
 from .prompt_template import PromptTemplate
 from .audit_rule import AuditRuleSet, AuditRule
+from .cve_knowledge import CVEKnowledge, CVESyncLog
 from .agent_task import (
     AgentTask, AgentEvent, AgentFinding,
     AgentTaskStatus, AgentTaskPhase, AgentEventType,
