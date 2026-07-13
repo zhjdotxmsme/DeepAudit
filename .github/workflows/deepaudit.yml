@@ -1,0 +1,114 @@
+# DeepAudit — Code security audit for pull requests.
+#
+# Drop this file into `.github/workflows/deepaudit.yml` in the repo you want
+# to protect. On every pull request it:
+#
+#   1. Installs the DeepAudit CLI (`pip install deepaudit-backend`).
+#   2. Uploads the working tree to your DeepAudit server.
+#   3. Waits for the audit to finish.
+#   4. Uploads the SARIF report to GitHub Code Scanning (Security tab).
+#   5. Fails the check when any finding meets the `--fail-on` severity.
+#
+# Required secrets (Settings → Secrets and variables → Actions):
+#   DEEPAUDIT_URL         — e.g. https://deepaudit.example.com
+#   DEEPAUDIT_TOKEN       — bearer token minted by your DeepAudit server
+#   DEEPAUDIT_PROJECT_ID  — target project ID
+
+name: DeepAudit
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+  push:
+    branches: [main, master]
+
+# Least-privilege token: only what Code Scanning + PR annotations need.
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: read
+
+jobs:
+  deepaudit:
+    name: DeepAudit security scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # `fetch-depth: 0` gives us the merge base, needed for diff-scope.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install DeepAudit CLI
+        run: python -m pip install --upgrade "deepaudit-backend"
+
+      # ------------------------------------------------------------------
+      # Compute the changed-file list for PRs so DeepAudit only scans them.
+      # ------------------------------------------------------------------
+      - name: Compute changed files (PR)
+        if: github.event_name == 'pull_request'
+        id: diff
+        run: |
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          git diff --name-only --diff-filter=AMRC "$base_sha" "$head_sha" \
+            > .deepaudit-diff.txt || true
+          echo "count=$(wc -l < .deepaudit-diff.txt)" >> "$GITHUB_OUTPUT"
+          echo "----- diff files -----"
+          cat .deepaudit-diff.txt || true
+
+      - name: Build --diff-files args
+        if: github.event_name == 'pull_request'
+        id: diffargs
+        run: |
+          args=""
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            args+=" --diff-files \"$line\""
+          done < .deepaudit-diff.txt
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------------
+      # Kick off the audit. On PRs, scope to changed files only.
+      # ------------------------------------------------------------------
+      - name: Run DeepAudit scan
+        env:
+          DEEPAUDIT_URL: ${{ secrets.DEEPAUDIT_URL }}
+          DEEPAUDIT_TOKEN: ${{ secrets.DEEPAUDIT_TOKEN }}
+          DEEPAUDIT_PROJECT_ID: ${{ secrets.DEEPAUDIT_PROJECT_ID }}
+        run: |
+          set -e
+          deepaudit scan \
+            --path . \
+            --wait \
+            --timeout 1800 \
+            --sarif-out deepaudit.sarif \
+            --dedupe \
+            --fail-on high \
+            ${{ steps.diffargs.outputs.args }}
+
+      # ------------------------------------------------------------------
+      # Ship SARIF to the GitHub Security tab even when the scan failed —
+      # findings are still valuable when the CI check is red.
+      # ------------------------------------------------------------------
+      - name: Upload SARIF to GitHub Code Scanning
+        if: always() && hashFiles('deepaudit.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: deepaudit.sarif
+          category: deepaudit
+
+      - name: Archive SARIF artifact
+        if: always() && hashFiles('deepaudit.sarif') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepaudit-sarif
+          path: deepaudit.sarif
+          retention-days: 30
