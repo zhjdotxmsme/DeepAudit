@@ -447,7 +447,20 @@ async def scan_repo_task(task_id: str, db_session_factory, user_config: dict = N
             if target_files:
                 print(f"🎯 指定分析 {len(target_files)} 个文件")
                 files = [f for f in files if f['path'] in target_files]
-            elif max_analyze_files > 0:
+
+            # Diff-scope 增量扫描 —— 仅审计 PR/CI 传入的变更文件
+            diff_files = (user_config or {}).get('scan_config', {}).get('diff_files') or []
+            if diff_files:
+                diff_set = {p.replace('\\', '/').lstrip('./') for p in diff_files}
+                before_count = len(files)
+                files = [
+                    f for f in files
+                    if f['path'].replace('\\', '/').lstrip('./') in diff_set
+                    or any(f['path'].replace('\\', '/').endswith('/' + d) for d in diff_set)
+                ]
+                print(f"🎯 Diff-scope: {len(files)}/{before_count} 个文件位于变更集内")
+
+            if not target_files and not diff_files and max_analyze_files > 0:
                 files = files[:max_analyze_files]
 
             task.total_files = len(files)
