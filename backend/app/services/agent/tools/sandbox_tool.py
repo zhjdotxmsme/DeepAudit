@@ -226,6 +226,8 @@ class SandboxManager:
         timeout: Optional[int] = None,
         env: Optional[Dict[str, str]] = None,
         network_mode: str = "none",
+        image: Optional[str] = None,
+        entrypoint: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         在沙箱中对指定目录执行工具命令
@@ -236,7 +238,9 @@ class SandboxManager:
             timeout: 超时时间
             env: 环境变量
             network_mode: 网络模式 (none, bridge, host)
-            
+            image: 容器镜像，None 则用默认 SANDBOX_IMAGE（用于 nuclei / playwright 等 DAST 工具）
+            entrypoint: 覆盖容器 ENTRYPOINT，None 表示不改（部分工具镜像 ENTRYPOINT 就是工具本身）
+
         Returns:
             执行结果
         """
@@ -270,7 +274,7 @@ class SandboxManager:
 
             # 准备容器配置
             container_config = {
-                "image": self.config.image,
+                "image": image or self.config.image,
                 "command": ["sh", "-c", wrapped_command],
                 "detach": True,
                 "mem_limit": self.config.memory_limit,
@@ -289,6 +293,11 @@ class SandboxManager:
                 "working_dir": "/workspace",
                 "environment": container_env,
             }
+
+            # 覆盖 ENTRYPOINT（部分工具镜像如 projectdiscovery/nuclei 的 ENTRYPOINT 就是二进制本身，
+            # 而我们通过 sh -c 执行命令，因此需要显式清空 entrypoint 才能进入 shell）
+            if entrypoint is not None:
+                container_config["entrypoint"] = entrypoint
 
             # 安全配置：可通过环境变量调整
             if self.config.cap_drop:
