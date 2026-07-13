@@ -91,6 +91,9 @@ from .cve_tool import CVEQueryTool, CVESyncTool
 # 🔥 新增：CodeGraph 代码图查询工具
 from .codegraph_tool import CodeGraphQueryTool, CodeGraphRebuildTool
 
+# 🔥 新增：Skills 系统工具（可插拔审计知识包）
+from ..skills.tools import ListSkillsTool, GetSkillTool, SearchSkillsTool
+
 __all__ = [
     # 基础
     "AgentTool",
@@ -153,6 +156,11 @@ __all__ = [
     # 🔥 CodeGraph 代码图工具
     "CodeGraphQueryTool",
     "CodeGraphRebuildTool",
+
+    # 🔥 Skills 系统工具
+    "ListSkillsTool",
+    "GetSkillTool",
+    "SearchSkillsTool",
     
     # 🔥 思考和推理工具
     "ThinkTool",

@@ -771,6 +771,8 @@ async def _initialize_tools(
         CVEQueryTool,
         # 🔥 CodeGraph 代码图工具
         CodeGraphQueryTool,
+        # 🔥 Skills 系统工具（可插拔审计知识包）
+        ListSkillsTool, GetSkillTool, SearchSkillsTool,
     )
     from app.services.agent.knowledge import (
         SecurityKnowledgeQueryTool,
@@ -970,6 +972,10 @@ async def _initialize_tools(
         "cve_query": CVEQueryTool(db_session=db),
         # 🔥 CodeGraph 代码图查询
         "codegraph_query": CodeGraphQueryTool(project_root, exclude_patterns=exclude_patterns),
+        # 🔥 Skills 系统 - 可插拔审计知识包
+        "list_skills": ListSkillsTool(),
+        "get_skill": GetSkillTool(),
+        "search_skills": SearchSkillsTool(),
     }
 
     # 🔥 注册 RAG 工具到 Recon Agent
@@ -1005,6 +1011,10 @@ async def _initialize_tools(
         "cve_query": CVEQueryTool(db_session=db),
         # 🔥 CodeGraph 代码图查询
         "codegraph_query": CodeGraphQueryTool(project_root, exclude_patterns=exclude_patterns),
+        # 🔥 Skills 系统 - 可插拔审计知识包
+        "list_skills": ListSkillsTool(),
+        "get_skill": GetSkillTool(),
+        "search_skills": SearchSkillsTool(),
     }
 
     # 🔥 注册 RAG 工具到 Analysis Agent
