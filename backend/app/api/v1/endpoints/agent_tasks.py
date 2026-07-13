@@ -422,7 +422,6 @@ async def _execute_agent_task(task_id: str):
             try:
                 from app.models.audit_rule import AuditRule, AuditRuleSet
                 from sqlalchemy import select as sa_select
-                from sqlalchemy.orm import selectinload
 
                 rules_result = await db.execute(
                     sa_select(AuditRule)
@@ -3346,10 +3345,68 @@ async def generate_audit_report(
             ]
         }
 
-    # Generate Enhanced Markdown Report
+    # === Generate Enhanced Markdown Report (v3.0) ===
+    # Improvements over v2.1:
+    #   - Full task_id in header (not truncated)
+    #   - Every fenced block has a language tag (fixes bare ``` PoC blocks)
+    #   - Table of contents with intra-doc anchors
+    #   - Surfaces previously-unused finding fields:
+    #       CWE/OWASP refs, CVSS, source/sink dataflow, function/class ctx,
+    #       matched_rule_code, XAI (what/why/how/impact)
+    #   - Cleaner per-finding hierarchy: H3 severity group -> H4 individual finding
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Calculate statistics
+    # Language map for code fences (module-level constant would be cleaner;
+    # kept local to preserve existing endpoint boundary)
+    LANG_MAP = {
+        # Python
+        'py': 'python', 'pyw': 'python', 'pyi': 'python',
+        # JavaScript/TypeScript
+        'js': 'javascript', 'mjs': 'javascript', 'cjs': 'javascript',
+        'ts': 'typescript', 'mts': 'typescript',
+        'jsx': 'jsx', 'tsx': 'tsx',
+        # Web
+        'html': 'html', 'htm': 'html',
+        'css': 'css', 'scss': 'scss', 'sass': 'sass', 'less': 'less',
+        'vue': 'vue', 'svelte': 'svelte',
+        # Backend
+        'java': 'java', 'kt': 'kotlin', 'kts': 'kotlin',
+        'go': 'go', 'rs': 'rust',
+        'rb': 'ruby', 'erb': 'erb',
+        'php': 'php', 'phtml': 'php',
+        # C-family
+        'c': 'c', 'h': 'c',
+        'cpp': 'cpp', 'cc': 'cpp', 'cxx': 'cpp', 'hpp': 'cpp',
+        'cs': 'csharp',
+        # Shell/Script
+        'sh': 'bash', 'bash': 'bash', 'zsh': 'zsh',
+        'ps1': 'powershell', 'psm1': 'powershell',
+        # Config
+        'json': 'json', 'yaml': 'yaml', 'yml': 'yaml',
+        'toml': 'toml', 'ini': 'ini', 'cfg': 'ini',
+        'xml': 'xml', 'xhtml': 'xml',
+        # Database
+        'sql': 'sql',
+        # Other
+        'md': 'markdown', 'markdown': 'markdown',
+        'sol': 'solidity', 'swift': 'swift',
+        'r': 'r', 'R': 'r', 'lua': 'lua',
+        'pl': 'perl', 'pm': 'perl',
+        'ex': 'elixir', 'exs': 'elixir',
+        'erl': 'erlang', 'hs': 'haskell',
+        'scala': 'scala', 'sc': 'scala',
+        'clj': 'clojure', 'cljs': 'clojure',
+        'dart': 'dart',
+        'groovy': 'groovy', 'gradle': 'groovy',
+    }
+
+    def detect_language(file_path: Optional[str]) -> str:
+        if not file_path:
+            return 'text'
+        ext = file_path.rsplit('.', 1)[-1].lower() if '.' in file_path else ''
+        return LANG_MAP.get(ext, 'text')
+
+    # Statistics
     total = len(findings)
     critical = sum(1 for f in findings if normalize_severity(f.severity) == 'critical')
     high = sum(1 for f in findings if normalize_severity(f.severity) == 'high')
@@ -3358,7 +3415,7 @@ async def generate_audit_report(
     verified = sum(1 for f in findings if f.is_verified)
     with_poc = sum(1 for f in findings if f.has_poc)
 
-    # Calculate duration
+    # Duration
     duration_str = "N/A"
     if task.completed_at and task.started_at:
         duration = (task.completed_at - task.started_at).total_seconds()
@@ -3369,30 +3426,53 @@ async def generate_audit_report(
         else:
             duration_str = f"{int(duration)} 秒"
 
-    md_lines = []
+    md_lines: list[str] = []
 
-    # Header
+    # === Title ===
     md_lines.append("# DeepAudit 安全审计报告")
+    md_lines.append("")
+    md_lines.append(f"> 项目 **{project.name}** · 生成于 {timestamp}")
+    md_lines.append("")
+
+    # === Table of Contents ===
+    md_lines.append("## 目录")
+    md_lines.append("")
+    md_lines.append("- [报告信息](#报告信息)")
+    md_lines.append("- [执行摘要](#执行摘要)")
+    md_lines.append("- [漏洞发现概览](#漏洞发现概览)")
+    md_lines.append("- [审计指标](#审计指标)")
+    if findings:
+        md_lines.append("- [漏洞详情](#漏洞详情)")
+        severity_map = {
+            'critical': ('严重 (Critical)', critical),
+            'high': ('高危 (High)', high),
+            'medium': ('中危 (Medium)', medium),
+            'low': ('低危 (Low)', low),
+        }
+        for sev_level, (sev_name, sev_count) in severity_map.items():
+            if sev_count > 0:
+                md_lines.append(f"  - [{sev_name}](#{sev_level}-漏洞) ({sev_count})")
+    if critical > 0 or high > 0:
+        md_lines.append("- [修复优先级建议](#修复优先级建议)")
     md_lines.append("")
     md_lines.append("---")
     md_lines.append("")
 
-    # Report Info
+    # === Report Info ===
     md_lines.append("## 报告信息")
     md_lines.append("")
-    md_lines.append(f"| 属性 | 内容 |")
-    md_lines.append(f"|----------|-------|")
+    md_lines.append("| 属性 | 内容 |")
+    md_lines.append("|------|------|")
     md_lines.append(f"| **项目名称** | {project.name} |")
-    md_lines.append(f"| **任务 ID** | `{task.id[:8]}...` |")
+    md_lines.append(f"| **任务 ID** | `{task.id}` |")
     md_lines.append(f"| **生成时间** | {timestamp} |")
     md_lines.append(f"| **任务状态** | {task.status.upper()} |")
     md_lines.append(f"| **耗时** | {duration_str} |")
     md_lines.append("")
 
-    # Executive Summary
+    # === Executive Summary ===
     md_lines.append("## 执行摘要")
     md_lines.append("")
-
     score = task.security_score
     if score is not None:
         if score >= 80:
@@ -3405,16 +3485,17 @@ async def generate_audit_report(
             score_assessment = "严重 - 需要立即进行修复"
             score_icon = "未通过"
         md_lines.append(f"**安全评分: {int(score)}/100** [{score_icon}]")
+        md_lines.append("")
         md_lines.append(f"*{score_assessment}*")
     else:
         md_lines.append("**安全评分:** 未计算")
     md_lines.append("")
 
-    # Findings Summary
-    md_lines.append("### 漏洞发现概览")
+    # === Findings Summary Table ===
+    md_lines.append("## 漏洞发现概览")
     md_lines.append("")
-    md_lines.append(f"| 严重程度 | 数量 | 已验证 |")
-    md_lines.append(f"|----------|-------|----------|")
+    md_lines.append("| 严重程度 | 数量 | 已验证 |")
+    md_lines.append("|----------|------|--------|")
     if critical > 0:
         md_lines.append(f"| **严重 (CRITICAL)** | {critical} | {sum(1 for f in findings if normalize_severity(f.severity) == 'critical' and f.is_verified)} |")
     if high > 0:
@@ -3426,8 +3507,8 @@ async def generate_audit_report(
     md_lines.append(f"| **总计** | {total} | {verified} |")
     md_lines.append("")
 
-    # Audit Metrics
-    md_lines.append("### 审计指标")
+    # === Audit Metrics ===
+    md_lines.append("## 审计指标")
     md_lines.append("")
     md_lines.append(f"- **分析文件数:** {task.analyzed_files} / {task.total_files}")
     md_lines.append(f"- **Agent 迭代次数:** {task.total_iterations}")
@@ -3437,157 +3518,188 @@ async def generate_audit_report(
         md_lines.append(f"- **生成的 PoC:** {with_poc}")
     md_lines.append("")
 
-    # Detailed Findings
+    # === Detailed Findings ===
     if not findings:
         md_lines.append("## 漏洞详情")
         md_lines.append("")
         md_lines.append("*本次审计未发现安全漏洞。*")
         md_lines.append("")
     else:
-        # Group findings by severity
-        severity_map = {
+        md_lines.append("## 漏洞详情")
+        md_lines.append("")
+
+        severity_display = {
             'critical': '严重 (Critical)',
             'high': '高危 (High)',
             'medium': '中危 (Medium)',
-            'low': '低危 (Low)'
+            'low': '低危 (Low)',
         }
-        
-        for severity_level, severity_name in severity_map.items():
+
+        for severity_level, severity_name in severity_display.items():
             severity_findings = [f for f in findings if normalize_severity(f.severity) == severity_level]
             if not severity_findings:
                 continue
 
-            md_lines.append(f"## {severity_name} 漏洞")
+            md_lines.append(f"### {severity_name} 漏洞")
             md_lines.append("")
 
             for i, f in enumerate(severity_findings, 1):
-                verified_badge = "[已验证]" if f.is_verified else "[未验证]"
-                poc_badge = " [含 PoC]" if f.has_poc else ""
+                lang = detect_language(f.file_path)
+                verified_badge = "已验证" if f.is_verified else "未验证"
+                poc_badge = " · 含 PoC" if f.has_poc else ""
+                finding_id = f"{severity_level.upper()}-{i}"
 
-                md_lines.append(f"### {severity_level.upper()}-{i}: {f.title}")
+                # Finding heading (H4) with explicit anchor for TOC/deep-linking
+                md_lines.append(f"#### <a id=\"finding-{severity_level}-{i}\"></a>{finding_id}: {f.title}")
                 md_lines.append("")
-                md_lines.append(f"**{verified_badge}**{poc_badge} | 类型: `{f.vulnerability_type}`")
-                md_lines.append("")
+
+                # Metadata table — all key facts in one glance
+                meta_rows: list[tuple[str, str]] = []
+                meta_rows.append(("状态", f"{verified_badge}{poc_badge}"))
+                meta_rows.append(("漏洞类型", f"`{f.vulnerability_type}`"))
 
                 if f.file_path:
-                    location = f"`{f.file_path}"
+                    loc = f.file_path
                     if f.line_start:
-                        location += f":{f.line_start}"
+                        loc += f":{f.line_start}"
                         if f.line_end and f.line_end != f.line_start:
-                            location += f"-{f.line_end}"
-                    location += "`"
-                    md_lines.append(f"**位置:** {location}")
-                    md_lines.append("")
+                            loc += f"-{f.line_end}"
+                    meta_rows.append(("位置", f"`{loc}`"))
 
-                if f.ai_confidence:
-                    md_lines.append(f"**AI 置信度:** {int(f.ai_confidence * 100)}%")
-                    md_lines.append("")
+                if f.function_name or f.class_name:
+                    ctx_parts = []
+                    if f.class_name:
+                        ctx_parts.append(f"class `{f.class_name}`")
+                    if f.function_name:
+                        ctx_parts.append(f"function `{f.function_name}`")
+                    meta_rows.append(("上下文", " · ".join(ctx_parts)))
+
+                if f.ai_confidence is not None:
+                    meta_rows.append(("AI 置信度", f"{int(f.ai_confidence * 100)}%"))
+
+                if f.cvss_score is not None:
+                    cvss_cell = f"{f.cvss_score:.1f}"
+                    if f.cvss_vector:
+                        cvss_cell += f" (`{f.cvss_vector}`)"
+                    meta_rows.append(("CVSS", cvss_cell))
+
+                if f.matched_rule_code:
+                    meta_rows.append(("匹配规则", f"`{f.matched_rule_code}`"))
+
+                # Extract CWE/OWASP tags from references JSON
+                cwe_tags: list[str] = []
+                other_refs: list[str] = []
+                if f.references:
+                    refs_iter = f.references if isinstance(f.references, list) else [f.references]
+                    for ref in refs_iter:
+                        if isinstance(ref, dict):
+                            label = ref.get('name') or ref.get('title') or ref.get('id') or ''
+                            url = ref.get('url') or ref.get('href') or ''
+                            label_upper = str(label).upper()
+                            if label_upper.startswith('CWE-') or label_upper.startswith('OWASP'):
+                                cwe_tags.append(f"[{label}]({url})" if url else str(label))
+                            elif url:
+                                other_refs.append(f"[{label or url}]({url})")
+                            elif label:
+                                other_refs.append(str(label))
+                        else:
+                            s = str(ref)
+                            if s.upper().startswith('CWE-') or s.upper().startswith('OWASP'):
+                                cwe_tags.append(s)
+                            else:
+                                other_refs.append(s)
+                if cwe_tags:
+                    meta_rows.append(("CWE/OWASP", " · ".join(cwe_tags)))
+
+                md_lines.append("| 属性 | 内容 |")
+                md_lines.append("|------|------|")
+                for label, value in meta_rows:
+                    md_lines.append(f"| **{label}** | {value} |")
+                md_lines.append("")
 
                 if f.description:
-                    md_lines.append("**漏洞描述:**")
+                    md_lines.append("**漏洞描述**")
                     md_lines.append("")
                     md_lines.append(f.description)
                     md_lines.append("")
 
+                # Dataflow (source -> sink)
+                if f.source or f.sink:
+                    md_lines.append("**数据流**")
+                    md_lines.append("")
+                    if f.source:
+                        md_lines.append(f"- **污点源 (Source):** `{f.source}`")
+                    if f.sink:
+                        md_lines.append(f"- **危险汇聚点 (Sink):** `{f.sink}`")
+                    md_lines.append("")
+
                 if f.code_snippet:
-                    # 🔥 v2.1: 增强语言检测，避免默认 python 标记错误
-                    lang = "text"  # 默认使用 text 而非 python
-                    if f.file_path:
-                        ext = f.file_path.split('.')[-1].lower()
-                        lang_map = {
-                            # Python
-                            'py': 'python', 'pyw': 'python', 'pyi': 'python',
-                            # JavaScript/TypeScript
-                            'js': 'javascript', 'mjs': 'javascript', 'cjs': 'javascript',
-                            'ts': 'typescript', 'mts': 'typescript',
-                            'jsx': 'jsx', 'tsx': 'tsx',
-                            # Web
-                            'html': 'html', 'htm': 'html',
-                            'css': 'css', 'scss': 'scss', 'sass': 'sass', 'less': 'less',
-                            'vue': 'vue', 'svelte': 'svelte',
-                            # Backend
-                            'java': 'java', 'kt': 'kotlin', 'kts': 'kotlin',
-                            'go': 'go', 'rs': 'rust',
-                            'rb': 'ruby', 'erb': 'erb',
-                            'php': 'php', 'phtml': 'php',
-                            # C-family
-                            'c': 'c', 'h': 'c',
-                            'cpp': 'cpp', 'cc': 'cpp', 'cxx': 'cpp', 'hpp': 'cpp',
-                            'cs': 'csharp',
-                            # Shell/Script
-                            'sh': 'bash', 'bash': 'bash', 'zsh': 'zsh',
-                            'ps1': 'powershell', 'psm1': 'powershell',
-                            # Config
-                            'json': 'json', 'yaml': 'yaml', 'yml': 'yaml',
-                            'toml': 'toml', 'ini': 'ini', 'cfg': 'ini',
-                            'xml': 'xml', 'xhtml': 'xml',
-                            # Database
-                            'sql': 'sql',
-                            # Other
-                            'md': 'markdown', 'markdown': 'markdown',
-                            'sol': 'solidity',
-                            'swift': 'swift',
-                            'r': 'r', 'R': 'r',
-                            'lua': 'lua',
-                            'pl': 'perl', 'pm': 'perl',
-                            'ex': 'elixir', 'exs': 'elixir',
-                            'erl': 'erlang',
-                            'hs': 'haskell',
-                            'scala': 'scala', 'sc': 'scala',
-                            'clj': 'clojure', 'cljs': 'clojure',
-                            'dart': 'dart',
-                            'groovy': 'groovy', 'gradle': 'groovy',
-                        }
-                        lang = lang_map.get(ext, 'text')
-                    md_lines.append("**漏洞代码:**")
+                    md_lines.append("**漏洞代码**")
                     md_lines.append("")
                     md_lines.append(f"```{lang}")
                     md_lines.append(f.code_snippet.strip())
                     md_lines.append("```")
                     md_lines.append("")
 
+                # XAI section — collapse into a details block to keep report scannable
+                xai_bits = [(f.xai_what, "What"), (f.xai_why, "Why"),
+                            (f.xai_how, "How"), (f.xai_impact, "Impact")]
+                xai_present = [(text, label) for text, label in xai_bits if text]
+                if xai_present:
+                    md_lines.append("<details>")
+                    md_lines.append("<summary><b>AI 解释 (XAI)</b></summary>")
+                    md_lines.append("")
+                    for text, label in xai_present:
+                        md_lines.append(f"**{label}:** {text}")
+                        md_lines.append("")
+                    md_lines.append("</details>")
+                    md_lines.append("")
+
                 if f.suggestion:
-                    md_lines.append("**修复建议:**")
+                    md_lines.append("**修复建议**")
                     md_lines.append("")
                     md_lines.append(f.suggestion)
                     md_lines.append("")
 
                 if f.fix_code:
-                    md_lines.append("**参考修复代码:**")
+                    md_lines.append("**参考修复代码**")
                     md_lines.append("")
-                    md_lines.append(f"```{lang if f.file_path else 'text'}")
+                    md_lines.append(f"```{lang}")
                     md_lines.append(f.fix_code.strip())
                     md_lines.append("```")
                     md_lines.append("")
 
-                # 🔥 添加 PoC 详情
                 if f.has_poc:
-                    md_lines.append("**概念验证 (PoC):**")
+                    md_lines.append("**概念验证 (PoC)**")
                     md_lines.append("")
-
                     if f.poc_description:
                         md_lines.append(f"*{f.poc_description}*")
                         md_lines.append("")
-
                     if f.poc_steps:
-                        md_lines.append("**复现步骤:**")
+                        md_lines.append("*复现步骤:*")
                         md_lines.append("")
                         for step_idx, step in enumerate(f.poc_steps, 1):
                             md_lines.append(f"{step_idx}. {step}")
                         md_lines.append("")
-
                     if f.poc_code:
-                        md_lines.append("**PoC 代码:**")
-                        md_lines.append("")
-                        md_lines.append("```")
+                        # PoC often shell/http — 'text' is safest generic
+                        md_lines.append("```text")
                         md_lines.append(f.poc_code.strip())
                         md_lines.append("```")
                         md_lines.append("")
 
+                # Non-CWE references (docs, blog posts, advisories)
+                if other_refs:
+                    md_lines.append("**参考链接**")
+                    md_lines.append("")
+                    for ref in other_refs:
+                        md_lines.append(f"- {ref}")
+                    md_lines.append("")
+
                 md_lines.append("---")
                 md_lines.append("")
 
-    # Remediation Priority
+    # === Remediation Priority ===
     if critical > 0 or high > 0:
         md_lines.append("## 修复优先级建议")
         md_lines.append("")
@@ -3608,7 +3720,7 @@ async def generate_audit_report(
             priority_idx += 1
         md_lines.append("")
 
-    # Footer
+    # === Footer ===
     md_lines.append("---")
     md_lines.append("")
     md_lines.append("*本报告由 DeepAudit - AI 驱动的安全分析系统生成*")

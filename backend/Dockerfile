@@ -106,6 +106,7 @@ COPY . .
 
 # 创建上传目录并设置启动脚本权限
 RUN mkdir -p /app/uploads/zip_files && \
+    sed -i 's/\r$//' /app/docker-entrypoint.sh && \
     chmod +x /app/docker-entrypoint.sh
 
 # 暴露端口
