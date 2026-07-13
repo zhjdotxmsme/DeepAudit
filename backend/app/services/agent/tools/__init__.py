@@ -94,6 +94,9 @@ from .codegraph_tool import CodeGraphQueryTool, CodeGraphRebuildTool
 # 🔥 新增：Skills 系统工具（可插拔审计知识包）
 from ..skills.tools import ListSkillsTool, GetSkillTool, SearchSkillsTool
 
+# 🔥 新增：DAST 工具 (Nuclei + Playwright)
+from .dast_tools import NucleiTool, PlaywrightProbeTool
+
 __all__ = [
     # 基础
     "AgentTool",
@@ -161,6 +164,10 @@ __all__ = [
     "ListSkillsTool",
     "GetSkillTool",
     "SearchSkillsTool",
+
+    # 🔥 DAST 工具
+    "NucleiTool",
+    "PlaywrightProbeTool",
     
     # 🔥 思考和推理工具
     "ThinkTool",

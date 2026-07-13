@@ -773,6 +773,8 @@ async def _initialize_tools(
         CodeGraphQueryTool,
         # 🔥 Skills 系统工具（可插拔审计知识包）
         ListSkillsTool, GetSkillTool, SearchSkillsTool,
+        # 🔥 DAST 工具 (Nuclei + Playwright)
+        NucleiTool, PlaywrightProbeTool,
     )
     from app.services.agent.knowledge import (
         SecurityKnowledgeQueryTool,
@@ -976,6 +978,9 @@ async def _initialize_tools(
         "list_skills": ListSkillsTool(),
         "get_skill": GetSkillTool(),
         "search_skills": SearchSkillsTool(),
+        # 🔥 DAST 工具 (Nuclei + Playwright) - 对活的 HTTP 目标做动态扫描
+        "nuclei_scan": NucleiTool(sandbox_manager),
+        "playwright_probe": PlaywrightProbeTool(sandbox_manager),
     }
 
     # 🔥 注册 RAG 工具到 Recon Agent
@@ -1015,6 +1020,9 @@ async def _initialize_tools(
         "list_skills": ListSkillsTool(),
         "get_skill": GetSkillTool(),
         "search_skills": SearchSkillsTool(),
+        # 🔥 DAST 工具 (Nuclei + Playwright)
+        "nuclei_scan": NucleiTool(sandbox_manager),
+        "playwright_probe": PlaywrightProbeTool(sandbox_manager),
     }
 
     # 🔥 注册 RAG 工具到 Analysis Agent
