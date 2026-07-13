@@ -307,3 +307,94 @@ async def export_task_report_pdf(
             "Content-Disposition": f'attachment; filename="{filename}"'
         }
     )
+
+
+@router.get("/{id}/report/sarif")
+async def export_task_report_sarif(
+    id: str,
+    dedupe: bool = True,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """Export task findings as SARIF 2.1.0 JSON.
+
+    SARIF (Static Analysis Results Interchange Format) is the format used by
+    GitHub Code Scanning, GitLab Advanced SAST, Azure DevOps, and SonarQube.
+
+    Query params:
+      * ``dedupe`` — when true (default) duplicate findings are collapsed via
+        the fingerprint (cwe_id, file, code_hash, sink) before export.
+    """
+    from fastapi.responses import Response
+    from app.services.report import SARIFExporter, FindingDeduplicator
+
+    # 获取任务
+    task_result = await db.execute(
+        select(AuditTask)
+        .options(selectinload(AuditTask.project))
+        .where(AuditTask.id == id)
+    )
+    task = task_result.scalars().first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="无权导出此任务报告")
+
+    issues_result = await db.execute(
+        select(AuditIssue)
+        .where(AuditIssue.task_id == id)
+        .order_by(AuditIssue.severity.desc(), AuditIssue.created_at.desc())
+    )
+    issues = issues_result.scalars().all()
+
+    findings = [
+        {
+            "id": issue.id,
+            "task_id": issue.task_id,
+            "issue_type": issue.issue_type,
+            "severity": issue.severity,
+            "title": issue.title or issue.message or issue.issue_type,
+            "description": issue.description or issue.message or "",
+            "suggestion": issue.suggestion,
+            "file_path": issue.file_path,
+            "line_number": issue.line_number,
+            "column_number": issue.column_number,
+            "code_snippet": issue.code_snippet,
+        }
+        for issue in issues
+    ]
+
+    stats_summary = None
+    if dedupe:
+        deduper = FindingDeduplicator()
+        findings, stats = deduper.dedupe(findings)
+        stats_summary = {
+            "input_count": stats.input_count,
+            "output_count": stats.output_count,
+            "duplicates_merged": stats.duplicates_merged,
+        }
+
+    project_name = task.project.name if task.project else f"task-{task.id[:8]}"
+    repo_uri = task.project.repository_url if task.project else None
+
+    exporter = SARIFExporter(tool_name="DeepAudit", tool_version="3.0.4")
+    sarif = exporter.export(
+        findings,
+        repo_uri=repo_uri,
+        commit_sha=task.branch_name,
+        run_metadata={
+            "task_id": task.id,
+            "project": project_name,
+            "dedupe_stats": stats_summary,
+        },
+    )
+
+    import json
+    body = json.dumps(sarif, ensure_ascii=False, indent=2).encode("utf-8")
+    filename = f"deepaudit-{task.id[:8]}-{datetime.now(timezone.utc).strftime('%Y%m%d')}.sarif"
+    return Response(
+        content=body,
+        media_type="application/sarif+json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
