@@ -11,6 +11,7 @@ import Account from "@/pages/Account";
 import AuditRules from "@/pages/AuditRules";
 import PromptManager from "@/pages/PromptManager";
 import Skills from "@/pages/Skills";
+import CVEKnowledge from "@/pages/CVEKnowledge";
 import type { ReactNode } from 'react';
 
 export interface RouteConfig {
@@ -85,6 +86,12 @@ const routes: RouteConfig[] = [
     name: "Skills 知识包",
     path: "/skills",
     element: <Skills />,
+    visible: true,
+  },
+  {
+    name: "CVE 知识库",
+    path: "/cve",
+    element: <CVEKnowledge />,
     visible: true,
   },
   {
