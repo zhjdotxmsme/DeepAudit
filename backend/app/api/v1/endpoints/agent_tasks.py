@@ -404,6 +404,7 @@ async def _execute_agent_task(task_id: str):
                 llm_service,
                 user_config,
                 sandbox_manager=sandbox_manager,
+                db=db,  # 🔥 新增：传入数据库会话
                 exclude_patterns=task.exclude_patterns,
                 target_files=task.target_files,
                 project_id=str(project.id),  # 🔥 传递 project_id 用于 RAG
@@ -416,6 +417,33 @@ async def _execute_agent_task(task_id: str):
                 logger.info(f"[Cancel] Task {task_id} cancelled after tools initialization")
                 raise asyncio.CancelledError("任务已取消")
 
+            # 🔥 加载启用的审计规则的自定义提示词
+            custom_prompts = []
+            try:
+                from app.models.audit_rule import AuditRule, AuditRuleSet
+                from sqlalchemy import select as sa_select
+                from sqlalchemy.orm import selectinload
+
+                rules_result = await db.execute(
+                    sa_select(AuditRule)
+                    .join(AuditRuleSet, AuditRule.rule_set_id == AuditRuleSet.id)
+                    .where(
+                        AuditRuleSet.is_active == True,
+                        AuditRule.enabled == True,
+                        AuditRule.custom_prompt.isnot(None),
+                    )
+                )
+                active_rules = rules_result.scalars().all()
+                for rule in active_rules:
+                    if rule.custom_prompt and rule.custom_prompt.strip():
+                        custom_prompts.append(f"[{rule.rule_code}] {rule.name}: {rule.custom_prompt}")
+                
+                if custom_prompts:
+                    logger.info(f"✅ 已加载 {len(custom_prompts)} 条自定义审计规则提示词")
+                    await event_emitter.emit_info(f"🎯 已加载 {len(custom_prompts)} 条自定义审计规则")
+            except Exception as e:
+                logger.warning(f"加载自定义审计规则提示词失败: {e}")
+
             # 创建子 Agent
             recon_agent = ReconAgent(
                 llm_service=llm_service,
@@ -427,6 +455,7 @@ async def _execute_agent_task(task_id: str):
                 llm_service=llm_service,
                 tools=tools.get("analysis", {}),
                 event_emitter=event_emitter,
+                custom_prompts=custom_prompts,  # 🔥 新增：传入自定义提示词
             )
 
             verification_agent = VerificationAgent(
@@ -707,6 +736,7 @@ async def _initialize_tools(
     llm_service,
     user_config: Optional[Dict[str, Any]],
     sandbox_manager: Any, # 传递预初始化的 SandboxManager
+    db: Optional[Any] = None,  # 🔥 新增：数据库会话，用于 CVE 查询等
     exclude_patterns: Optional[List[str]] = None,
     target_files: Optional[List[str]] = None,
     project_id: Optional[str] = None,  # 🔥 用于 RAG collection_name
@@ -720,6 +750,7 @@ async def _initialize_tools(
         llm_service: LLM 服务
         user_config: 用户配置
         sandbox_manager: 沙箱管理器
+        db: 数据库会话（用于 CVE 查询等需要数据库的工具）
         exclude_patterns: 排除模式列表
         target_files: 目标文件列表
         project_id: 项目 ID（用于 RAG collection_name）
@@ -736,6 +767,10 @@ async def _initialize_tools(
         VulnerabilityValidationTool,
         # 🔥 RAG 工具
         RAGQueryTool, SecurityCodeSearchTool, FunctionContextTool,
+        # 🔥 CVE 查询工具
+        CVEQueryTool,
+        # 🔥 CodeGraph 代码图工具
+        CodeGraphQueryTool,
     )
     from app.services.agent.knowledge import (
         SecurityKnowledgeQueryTool,
@@ -931,6 +966,10 @@ async def _initialize_tools(
         "safety_scan": SafetyTool(project_root, sandbox_manager),
         "trufflehog_scan": TruffleHogTool(project_root, sandbox_manager),
         "osv_scan": OSVScannerTool(project_root, sandbox_manager),
+        # 🔥 CVE 知识库查询
+        "cve_query": CVEQueryTool(db_session=db),
+        # 🔥 CodeGraph 代码图查询
+        "codegraph_query": CodeGraphQueryTool(project_root, exclude_patterns=exclude_patterns),
     }
 
     # 🔥 注册 RAG 工具到 Recon Agent
@@ -962,6 +1001,10 @@ async def _initialize_tools(
         # 安全知识查询
         "query_security_knowledge": SecurityKnowledgeQueryTool(),
         "get_vulnerability_knowledge": GetVulnerabilityKnowledgeTool(),
+        # 🔥 CVE 知识库查询
+        "cve_query": CVEQueryTool(db_session=db),
+        # 🔥 CodeGraph 代码图查询
+        "codegraph_query": CodeGraphQueryTool(project_root, exclude_patterns=exclude_patterns),
     }
 
     # 🔥 注册 RAG 工具到 Analysis Agent

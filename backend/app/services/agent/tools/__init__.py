@@ -85,6 +85,12 @@ from .kunlun_tool import KunlunMTool, KunlunRuleListTool, KunlunPluginTool
 # 🔥 新增：通用代码执行工具 (LLM 驱动的 Fuzzing Harness)
 from .run_code import RunCodeTool, ExtractFunctionTool
 
+# 🔥 新增：CVE 查询工具
+from .cve_tool import CVEQueryTool, CVESyncTool
+
+# 🔥 新增：CodeGraph 代码图查询工具
+from .codegraph_tool import CodeGraphQueryTool, CodeGraphRebuildTool
+
 __all__ = [
     # 基础
     "AgentTool",
@@ -139,6 +145,14 @@ __all__ = [
     "SafetyTool",
     "TruffleHogTool",
     "OSVScannerTool",
+    
+    # 🔥 CVE 知识库工具
+    "CVEQueryTool",
+    "CVESyncTool",
+    
+    # 🔥 CodeGraph 代码图工具
+    "CodeGraphQueryTool",
+    "CodeGraphRebuildTool",
     
     # 🔥 思考和推理工具
     "ThinkTool",
