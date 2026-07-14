@@ -166,6 +166,11 @@ class DynamicAgentExecutor:
                 
                 # 执行 Agent
                 start_time = time.time()
+                # 🔥 stash input_data on agent so base.call_llm can read config (reasoning_effort, audit_instructions)
+                try:
+                    agent.input_data = input_data
+                except Exception:
+                    pass
                 result = await asyncio.wait_for(
                     agent.run(input_data),
                     timeout=self.default_timeout,

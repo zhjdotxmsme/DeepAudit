@@ -540,16 +540,22 @@ async def scan_repo_task(task_id: str, db_session_factory, user_config: dict = N
                     scan_config = (user_config or {}).get('scan_config', {})
                     rule_set_id = scan_config.get('rule_set_id')
                     prompt_template_id = scan_config.get('prompt_template_id')
+                    # reasoning_effort: quick/standard/deep 别名 → LiteLLM low/medium/high
+                    reasoning_alias = (scan_config.get('reasoning_effort') or '').strip().lower() or None
+                    reasoning_map = {"quick": "low", "standard": "medium", "deep": "high",
+                                     "low": "low", "medium": "medium", "high": "high"}
+                    reasoning_effort = reasoning_map.get(reasoning_alias) if reasoning_alias else None
                     
                     if rule_set_id or prompt_template_id:
                         analysis = await llm_service.analyze_code_with_rules(
                             content, language,
                             rule_set_id=rule_set_id,
                             prompt_template_id=prompt_template_id,
-                            db_session=db
+                            db_session=db,
+                            reasoning_effort=reasoning_effort,
                         )
                     else:
-                        analysis = await llm_service.analyze_code(content, language)
+                        analysis = await llm_service.analyze_code(content, language, reasoning_effort=reasoning_effort)
                     print(f"✅ LLM 分析完成: {file_info['path']}")
                     
                     # 再次检查是否取消（LLM分析后）

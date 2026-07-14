@@ -871,11 +871,68 @@ class BaseAgent(ABC):
         """
         self._iteration += 1
 
+        # 🔥 注入 workspace 快照（pending todos + recent notes）到 messages 首部
+        # 灵感来自 Strix — 让 LLM 每轮都能看到自己的结构化工作记忆，抗上下文漂移
+        try:
+            from ..tools.workspace_tools import get_workspace_snapshot
+            snapshot = get_workspace_snapshot()
+            snapshot_block = self._format_workspace_block(snapshot)
+            if snapshot_block:
+                # 插入到第一个 system 消息之后（如果存在），否则插入到最前
+                insert_at = 0
+                for idx, m in enumerate(messages):
+                    if m.get("role") == "system":
+                        insert_at = idx + 1
+                    else:
+                        break
+                messages = list(messages)  # copy
+                messages.insert(insert_at, {"role": "system", "content": snapshot_block})
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"workspace snapshot injection skipped: {e}")
+
+        # 🔥 注入审计指令 (rules of engagement) — Strix --instruction-file 等价
+        try:
+            audit_instructions = None
+            if hasattr(self, "input_data") and isinstance(self.input_data, dict):
+                cfg = self.input_data.get("config") or {}
+                audit_instructions = cfg.get("audit_instructions")
+            if audit_instructions and isinstance(audit_instructions, str) and audit_instructions.strip():
+                messages = list(messages)  # copy (may already be copied above)
+                # 追加到第一个 system 消息末尾，或作为新的 system 消息插入
+                inst_block = (
+                    "## 📋 审计指令 (Rules of Engagement)\n"
+                    "以下是本次任务的额外审计要求，你必须严格遵守:\n\n"
+                    f"{audit_instructions.strip()}"
+                )
+                inserted = False
+                for idx, m in enumerate(messages):
+                    if m.get("role") == "system":
+                        messages[idx] = {
+                            "role": "system",
+                            "content": (m.get("content") or "") + "\n\n" + inst_block,
+                        }
+                        inserted = True
+                        break
+                if not inserted:
+                    messages.insert(0, {"role": "system", "content": inst_block})
+        except Exception as e:  # pragma: no cover
+            logger.debug(f"audit_instructions injection skipped: {e}")
+
+        # 🔥 从 input_data 提取 reasoning_effort
+        reasoning_effort = None
+        try:
+            if hasattr(self, "input_data") and isinstance(self.input_data, dict):
+                cfg = self.input_data.get("config") or {}
+                reasoning_effort = cfg.get("reasoning_effort")
+        except Exception:
+            reasoning_effort = None
+
         try:
             # 🔥 不传递 temperature 和 max_tokens，让 LLMService 使用用户配置
             response = await self.llm_service.chat_completion(
                 messages=messages,
                 tools=tools,
+                reasoning_effort=reasoning_effort,
             )
 
             if response.get("usage"):
@@ -886,7 +943,34 @@ class BaseAgent(ABC):
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
             raise
-    
+
+    def _format_workspace_block(self, snapshot: Dict[str, Any]) -> Optional[str]:
+        """把 workspace 快照格式化成简短的 system 消息注入 LLM"""
+        if not snapshot:
+            return None
+        todos = snapshot.get("todos") or []
+        notes = snapshot.get("notes") or []
+        pending = [t for t in todos if t.get("status") in ("pending", "in_progress")]
+        if not pending and not notes:
+            return None
+        lines: List[str] = ["## 🧠 Workspace 状态（跨轮记忆）"]
+        if pending:
+            lines.append("\n### 待办 (pending / in_progress)")
+            for t in pending[:20]:
+                status_marker = "▶" if t.get("status") == "in_progress" else "☐"
+                prio = t.get("priority", "medium")
+                lines.append(f"- {status_marker} [{prio}] {t.get('id','?')[:8]}: {t.get('content','')}")
+        if notes:
+            recent = sorted(notes, key=lambda n: n.get("created_at", 0), reverse=True)[:10]
+            lines.append("\n### 近期笔记 (最新 10 条)")
+            for n in recent:
+                scope = n.get("scope", "general")
+                nid = n.get("id", "?")[:8]
+                title = n.get("title") or (n.get("content", "")[:60] + "…")
+                lines.append(f"- [{scope}] {nid}: {title}")
+        lines.append("\n> 记得用 `update_todo` / `create_note` 维护此清单。")
+        return "\n".join(lines)
+
     def get_tool_descriptions(self) -> List[Dict[str, Any]]:
         """获取工具描述（用于 LLM）"""
         descriptions = []

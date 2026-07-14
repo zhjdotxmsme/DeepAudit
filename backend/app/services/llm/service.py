@@ -335,7 +335,7 @@ Note:
 
 ⚠️ CRITICAL: Read line numbers from the "lineNumber|" prefix on the left of each code line. Do NOT guess or use 0!"""
 
-    async def analyze_code(self, code: str, language: str) -> Dict[str, Any]:
+    async def analyze_code(self, code: str, language: str, reasoning_effort: Optional[str] = None) -> Dict[str, Any]:
         """
         分析代码并返回结构化问题
         支持中英文输出
@@ -384,6 +384,7 @@ Please analyze the following code:
                 ],
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
+                reasoning_effort=reasoning_effort,
             )
             
             response = await adapter.complete(request)
@@ -427,6 +428,7 @@ Please analyze the following code:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         🔥 Agent 使用的聊天完成接口（支持工具调用）
@@ -436,6 +438,7 @@ Please analyze the following code:
             temperature: 温度参数（None 时使用用户配置）
             max_tokens: 最大token数（None 时使用用户配置）
             tools: 工具描述列表（可选）
+            reasoning_effort: quick|standard|deep — 内部映射为 low/medium/high
 
         Returns:
             包含 content、usage 和 tool_calls 的字典
@@ -455,6 +458,7 @@ Please analyze the following code:
             temperature=actual_temperature,
             max_tokens=actual_max_tokens,
             tools=tools,
+            reasoning_effort=reasoning_effort,
         )
 
         adapter = LLMFactory.create_adapter(self.config)
@@ -846,7 +850,8 @@ Please analyze the following code:
         language: str, 
         custom_prompt: str,
         rules: Optional[list] = None,
-        output_language: Optional[str] = None
+        output_language: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         使用自定义提示词分析代码
@@ -999,6 +1004,7 @@ Please analyze the following code:
                 ],
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
+                reasoning_effort=reasoning_effort,
             )
 
             response = await adapter.complete(request)
@@ -1021,7 +1027,8 @@ Please analyze the following code:
         rule_set_id: Optional[str] = None,
         prompt_template_id: Optional[str] = None,
         db_session = None,
-        use_default_template: bool = True
+        use_default_template: bool = True,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         使用指定的规则集和提示词模板分析代码
@@ -1134,10 +1141,10 @@ Please analyze the following code:
         
         # 如果有自定义提示词，使用自定义分析
         if custom_prompt:
-            return await self.analyze_code_with_custom_prompt(code, language, custom_prompt, rules)
+            return await self.analyze_code_with_custom_prompt(code, language, custom_prompt, rules, reasoning_effort=reasoning_effort)
         
         # 否则使用硬编码的默认分析（兜底）
-        return await self.analyze_code(code, language)
+        return await self.analyze_code(code, language, reasoning_effort=reasoning_effort)
 
 
 # 全局服务实例

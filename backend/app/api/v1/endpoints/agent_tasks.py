@@ -34,6 +34,10 @@ from app.models.user import User
 from app.models.user_config import UserConfig
 from app.services.agent.event_manager import EventManager
 from app.services.agent.streaming import StreamHandler, StreamEvent, StreamEventType
+from app.services.agent.tools import (
+    CreateSubAgentTool, RunSubAgentsTool, CollectSubAgentResultsTool,
+    SendMessageTool, WaitForMessageTool, ViewAgentGraphTool, AgentFinishTool,
+)
 from app.services.git_ssh_service import GitSSHOperations
 from app.core.encryption import decrypt_sensitive_data
 
@@ -486,6 +490,42 @@ async def _execute_agent_task(task_id: str):
             analysis_agent.set_cancel_callback(check_global_cancel)
             verification_agent.set_cancel_callback(check_global_cancel)
 
+            # 🔥 Agent Graph 协作工具注入（Strix-style 动态子Agent + 消息总线）
+            # 这些工具需要 parent_agent_id 等运行时依赖，必须在 Agent 构造后再注入
+            # 子Agent 池默认使用 analysis 工具集（最完整，覆盖静态分析 + 沙箱验证）
+            sub_agent_tool_pool = tools.get("analysis", {})
+
+            def _bind_graph_tools(_agent, _tool_pool):
+                _agent.tools["create_sub_agent"] = CreateSubAgentTool(
+                    parent_agent_id=_agent._agent_id,
+                    llm_service=llm_service,
+                    tools=_tool_pool,
+                    event_emitter=event_emitter,
+                )
+                _agent.tools["run_sub_agents"] = RunSubAgentsTool(
+                    parent_agent_id=_agent._agent_id,
+                    llm_service=llm_service,
+                    tools=_tool_pool,
+                    event_emitter=event_emitter,
+                )
+                _agent.tools["collect_sub_agent_results"] = CollectSubAgentResultsTool(
+                    parent_agent_id=_agent._agent_id,
+                )
+                _agent.tools["send_message"] = SendMessageTool(sender_agent_id=_agent._agent_id)
+                _agent.tools["wait_for_message"] = WaitForMessageTool(
+                    agent_id=_agent._agent_id, agent_state=_agent._state,
+                )
+                _agent.tools["view_agent_graph"] = ViewAgentGraphTool(current_agent_id=_agent._agent_id)
+                _agent.tools["agent_finish"] = AgentFinishTool(
+                    agent_id=_agent._agent_id, agent_state=_agent._state,
+                )
+
+            # Orchestrator 与 Analysis 可派生子Agent；Recon/Verification 仅参与消息与图查看
+            _bind_graph_tools(orchestrator, sub_agent_tool_pool)
+            _bind_graph_tools(analysis_agent, sub_agent_tool_pool)
+            _bind_graph_tools(recon_agent, sub_agent_tool_pool)
+            _bind_graph_tools(verification_agent, sub_agent_tool_pool)
+
             # 注册到全局
             _running_orchestrators[task_id] = orchestrator
             _running_tasks[task_id] = orchestrator  # 兼容旧的取消逻辑
@@ -513,6 +553,33 @@ async def _execute_agent_task(task_id: str):
             task.total_files = project_info.get("file_count", 0)
             await db.commit()
             
+            # 🔥 Audit instructions (rules of engagement) — Strix-style --instruction-file
+            # 支持两种来源:
+            #   1. scan_config.audit_instructions: 直接嵌入的文本
+            #   2. scan_config.audit_instruction_file: 相对 project_root 的文件路径
+            audit_instructions = ""
+            scan_cfg = task.scan_config or {}
+            inline_inst = scan_cfg.get("audit_instructions")
+            if isinstance(inline_inst, str) and inline_inst.strip():
+                audit_instructions = inline_inst.strip()
+            else:
+                inst_file = scan_cfg.get("audit_instruction_file")
+                if isinstance(inst_file, str) and inst_file.strip():
+                    try:
+                        inst_path = os.path.normpath(os.path.join(project_root, inst_file))
+                        # 防目录穿越
+                        if not inst_path.startswith(os.path.normpath(project_root)):
+                            logger.warning(f"audit_instruction_file 越界，忽略: {inst_file}")
+                        elif os.path.isfile(inst_path):
+                            with open(inst_path, "r", encoding="utf-8", errors="replace") as f:
+                                audit_instructions = f.read().strip()
+                            logger.info(f"✅ 已加载审计指令文件: {inst_file} ({len(audit_instructions)} chars)")
+                            await event_emitter.emit_info(f"📋 已加载审计指令: {inst_file}")
+                        else:
+                            logger.warning(f"audit_instruction_file 不存在: {inst_file}")
+                    except Exception as e:
+                        logger.warning(f"读取 audit_instruction_file 失败: {e}")
+
             # 构建输入数据
             input_data = {
                 "project_info": project_info,
@@ -522,6 +589,10 @@ async def _execute_agent_task(task_id: str):
                     "exclude_patterns": task.exclude_patterns or [],
                     "target_files": task.target_files or [],
                     "max_iterations": task.max_iterations or 50,
+                    # 🔥 Reasoning depth: quick|standard|deep -> LiteLLM low|medium|high
+                    "reasoning_effort": scan_cfg.get("reasoning_effort") or "standard",
+                    # 🔥 Rules of engagement (Strix --instruction-file 等价)
+                    "audit_instructions": audit_instructions,
                 },
                 "project_root": project_root,
                 "task_id": task_id,
@@ -774,6 +845,12 @@ async def _initialize_tools(
         ListSkillsTool, GetSkillTool, SearchSkillsTool,
         # 🔥 DAST 工具 (Nuclei + Playwright)
         NucleiTool, PlaywrightProbeTool,
+        # 🔥 Agent 工作记忆工具（notes + todo，抗跨轮上下文漂移）
+        CreateNoteTool, ListNotesTool,
+        CreateTodoTool, UpdateTodoTool, ListTodosTool,
+        # 🔥 Agent Graph 协作工具（Strix-style 动态子Agent + 消息总线）
+        CreateSubAgentTool, RunSubAgentsTool, CollectSubAgentResultsTool,
+        SendMessageTool, WaitForMessageTool, ViewAgentGraphTool, AgentFinishTool,
     )
     from app.services.agent.knowledge import (
         SecurityKnowledgeQueryTool,
@@ -956,6 +1033,12 @@ async def _initialize_tools(
         "search_code": FileSearchTool(project_root, exclude_patterns, target_files),
         "think": ThinkTool(),
         "reflect": ReflectTool(),
+        # 🔥 Agent 跨轮工作记忆（notes + todo）— 抗上下文漂移，长审计任务必备
+        "create_note": CreateNoteTool(),
+        "list_notes": ListNotesTool(),
+        "create_todo": CreateTodoTool(),
+        "update_todo": UpdateTodoTool(),
+        "list_todos": ListTodosTool(),
     }
     
     # Recon 工具
@@ -1046,6 +1129,8 @@ async def _initialize_tools(
         UniversalVulnTestTool,
         # 🔥 新增：通用代码执行工具 (LLM 驱动的 Fuzzing Harness)
         RunCodeTool, ExtractFunctionTool,
+        # 🔥 新增：PoC 沙箱执行 + 报告绑定
+        ValidatePoCTool,
     )
 
     verification_tools = {
@@ -1080,12 +1165,21 @@ async def _initialize_tools(
 
         # 报告工具 - 🔥 v2.1: 传递 project_root 用于文件验证
         "create_vulnerability_report": CreateVulnerabilityReportTool(project_root),
+
+        # 🔥 PoC 沙箱执行 + 报告绑定
+        "validate_poc": ValidatePoCTool(sandbox_manager, project_root),
     }
     
-    # Orchestrator 工具（主要是思考工具）
+    # Orchestrator 工具（主要是思考工具 + 工作记忆）
     orchestrator_tools = {
         "think": ThinkTool(),
         "reflect": ReflectTool(),
+        # 🔥 跨轮工作记忆 - Orchestrator 特别受益于 todo 追踪子任务
+        "create_note": CreateNoteTool(),
+        "list_notes": ListNotesTool(),
+        "create_todo": CreateTodoTool(),
+        "update_todo": UpdateTodoTool(),
+        "list_todos": ListTodosTool(),
     }
     
     return {

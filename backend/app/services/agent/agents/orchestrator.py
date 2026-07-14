@@ -583,7 +583,10 @@ Action Input: {{"参数": "值"}}
 {', '.join(self.sub_agents.keys()) if self.sub_agents else '(暂无子 Agent)'}
 
 请开始你的审计工作。首先思考应该如何开展，然后决定第一步做什么。"""
-        
+
+        # audit_instructions injection handled centrally in BaseAgent.call_llm (once per round).
+        # Do NOT prepend here — would produce duplicate copies on round 1.
+
         return msg
     
     def _parse_llm_response(self, response: str) -> Optional[AgentStep]:
@@ -729,6 +732,11 @@ Action Input: {{"参数": "值"}}
 
             async def run_with_cancel_check():
                 """包装子 Agent 执行，定期检查取消状态"""
+                # 🔥 propagate config so base.call_llm can inject audit_instructions / reasoning_effort
+                try:
+                    agent.input_data = sub_input
+                except Exception:
+                    pass
                 run_task = asyncio.create_task(agent.run(sub_input))
                 try:
                     while not run_task.done():

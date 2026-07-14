@@ -85,6 +85,9 @@ from .kunlun_tool import KunlunMTool, KunlunRuleListTool, KunlunPluginTool
 # 🔥 新增：通用代码执行工具 (LLM 驱动的 Fuzzing Harness)
 from .run_code import RunCodeTool, ExtractFunctionTool
 
+# 🔥 新增：PoC 沙箱执行 + 报告绑定
+from .poc_runtime import ValidatePoCTool
+
 # 🔥 新增：CVE 查询工具
 from .cve_tool import CVEQueryTool, CVESyncTool
 
@@ -96,6 +99,17 @@ from ..skills.tools import ListSkillsTool, GetSkillTool, SearchSkillsTool
 
 # 🔥 新增：DAST 工具 (Nuclei + Playwright)
 from .dast_tools import NucleiTool, PlaywrightProbeTool
+
+# 🔥 新增：Workspace 工具（跨轮结构化记忆 - Notes + Todos）
+from .workspace_tools import (
+    CreateNoteTool,
+    ListNotesTool,
+    CreateTodoTool,
+    UpdateTodoTool,
+    ListTodosTool,
+    get_workspace_snapshot,
+    clear_workspace,
+)
 
 __all__ = [
     # 基础
@@ -200,4 +214,16 @@ __all__ = [
     # 🔥 通用代码执行工具 (LLM 驱动的 Fuzzing Harness)
     "RunCodeTool",
     "ExtractFunctionTool",
+
+    # 🔥 PoC 沙箱执行 + 报告绑定
+    "ValidatePoCTool",
+
+    # 🔥 Workspace 工具 (跨轮结构化记忆)
+    "CreateNoteTool",
+    "ListNotesTool",
+    "CreateTodoTool",
+    "UpdateTodoTool",
+    "ListTodosTool",
+    "get_workspace_snapshot",
+    "clear_workspace",
 ]

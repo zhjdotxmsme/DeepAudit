@@ -183,8 +183,8 @@ class LiteLLMAdapter(BaseLLMAdapter):
         # 禁用 LiteLLM 的缓存，确保每次都实际调用 API
         litellm.cache = None
         
-        # 禁用 LiteLLM 自动添加的 reasoning_effort 参数
-        # 这可以防止模型名称被错误解析为 effort 参数
+        # drop_params: 让 LiteLLM 自动丢弃目标模型不支持的参数
+        # (例如非 reasoning 模型收到 reasoning_effort 时会被静默丢弃，不报错)
         litellm.drop_params = True
         
         # 构建消息
@@ -237,6 +237,22 @@ class LiteLLMAdapter(BaseLLMAdapter):
         if self.config.provider == LLMProvider.OPENAI:
             kwargs["frequency_penalty"] = self.config.frequency_penalty
             kwargs["presence_penalty"] = self.config.presence_penalty
+
+        # Reasoning effort: LiteLLM 会为不支持的模型自动 drop (drop_params=True)
+        # 别名映射: quick->low, standard->medium, deep->high
+        if request.reasoning_effort:
+            effort_alias_map = {
+                "quick": "low",
+                "standard": "medium",
+                "deep": "high",
+            }
+            effort_value = effort_alias_map.get(
+                request.reasoning_effort.lower(),
+                request.reasoning_effort.lower(),
+            )
+            if effort_value in {"minimal", "low", "medium", "high"}:
+                kwargs["reasoning_effort"] = effort_value
+                logger.debug(f"🧠 reasoning_effort={effort_value}")
 
         try:
             # 调用 LiteLLM

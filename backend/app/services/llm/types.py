@@ -53,6 +53,11 @@ class LLMRequest:
     max_tokens: Optional[int] = None
     top_p: Optional[float] = None
     stream: bool = False
+    # Reasoning depth control. Accepts LiteLLM standard values ("low"/"medium"/"high"/"minimal")
+    # or DeepAudit aliases ("quick"/"standard"/"deep"). Only forwarded to providers that
+    # support reasoning_effort (OpenAI o-series, Anthropic extended thinking, Gemini 2.5+).
+    # Unknown providers auto-drop via LiteLLM `drop_params=True`.
+    reasoning_effort: Optional[str] = None
 
 
 @dataclass
