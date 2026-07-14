@@ -163,10 +163,384 @@ class OSVClient:
 class CVESyncService:
     """CVE 同步服务"""
 
+    # 默认技术栈关键词（Java 生态、Vue2/3、MySQL、Redis、Nacos、XXL-Job）
+    DEFAULT_TECH_STACK_KEYWORDS = [
+        # Java 生态
+        "spring", "spring boot", "spring cloud", "spring security",
+        "log4j", "logback", "fastjson", "jackson", "shiro", "struts",
+        "tomcat", "jetty", "dubbo", "mybatis", "hibernate",
+        # 前端
+        "vue", "vue.js", "vue2", "vue3", "element-ui", "element plus",
+        "webpack", "vite", "axios",
+        # 中间件
+        "mysql", "redis", "nacos", "xxl-job", "xxljob",
+        "rabbitmq", "kafka", "elasticsearch", "nginx", "zookeeper",
+        # JVM / 通用组件
+        "openjdk", "netty", "commons", "poi", "xstream",
+    ]
+
+    # NVD API 单次查询日期范围限制（120 天），实际使用 90 天窗口保留余量
+    NVD_DATE_WINDOW_DAYS = 90
+
     def __init__(self, db: AsyncSession, nvd_api_key: Optional[str] = None):
         self.db = db
         self.nvd_client = NVDClient(api_key=nvd_api_key)
         self.osv_client = OSVClient()
+
+    async def _upsert_cve_from_nvd(
+        self,
+        cve_data: Dict[str, Any],
+        source_override: str = "nvd",
+    ) -> Optional[str]:
+        """
+        解析并 upsert 单条 NVD CVE，返回 "new" / "updated" / None（失败）
+
+        提取自 sync_nvd 的解析/入库逻辑，供增量同步与技术栈同步复用
+        """
+        try:
+            cve_id = cve_data.get("id", "")
+            if not cve_id:
+                return None
+
+            # 描述
+            descriptions = cve_data.get("descriptions", [])
+            description = ""
+            for desc in descriptions:
+                if desc.get("lang") == "en":
+                    description = desc.get("value", "")
+                    break
+            if not description and descriptions:
+                description = descriptions[0].get("value", "")
+
+            # CVSS
+            metrics = cve_data.get("metrics", {})
+            cvss_score = None
+            severity = None
+
+            cvss_v31 = metrics.get("cvssMetricV31", [])
+            if cvss_v31:
+                cvss_dict = cvss_v31[0].get("cvssData", {})
+                cvss_score = cvss_dict.get("baseScore")
+                severity = cvss_dict.get("baseSeverity", "UNKNOWN")
+            else:
+                cvss_v30 = metrics.get("cvssMetricV30", [])
+                if cvss_v30:
+                    cvss_dict = cvss_v30[0].get("cvssData", {})
+                    cvss_score = cvss_dict.get("baseScore")
+                    severity = cvss_dict.get("baseSeverity", "UNKNOWN")
+
+            # CWE
+            weaknesses = cve_data.get("weaknesses", [])
+            cwe_ids = []
+            for weakness in weaknesses:
+                for desc in weakness.get("description", []):
+                    if desc.get("lang") == "en":
+                        cwe_id = desc.get("value", "")
+                        if cwe_id.startswith("CWE-"):
+                            cwe_ids.append(cwe_id)
+
+            # 影响包 (CPE)
+            configurations = cve_data.get("configurations", [])
+            affected_packages = []
+            for config in configurations:
+                for node in config.get("nodes", []):
+                    for cpe_match in node.get("cpeMatch", []):
+                        if cpe_match.get("vulnerable", False):
+                            criteria = cpe_match.get("criteria", "")
+                            parts = criteria.split(":")
+                            if len(parts) >= 5:
+                                affected_packages.append({
+                                    "cpe": criteria,
+                                    "vendor": parts[3] if len(parts) > 3 else "",
+                                    "product": parts[4] if len(parts) > 4 else "",
+                                    "versionStart": cpe_match.get("versionStartExcluding"),
+                                    "versionEnd": cpe_match.get("versionEndExcluding"),
+                                })
+
+            # 参考链接
+            references = []
+            for ref in cve_data.get("references", []):
+                ref_url = ref.get("url", "")
+                if ref_url:
+                    references.append({
+                        "url": ref_url,
+                        "tags": ref.get("tags", []),
+                    })
+
+            # 时间
+            published = cve_data.get("published")
+            modified = cve_data.get("lastModified")
+            published_at = (
+                datetime.fromisoformat(published.replace("Z", "+00:00")) if published else None
+            )
+            modified_at = (
+                datetime.fromisoformat(modified.replace("Z", "+00:00")) if modified else None
+            )
+
+            # Upsert
+            result = await self.db.execute(
+                select(CVEKnowledge).where(CVEKnowledge.cve_id == cve_id)
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                existing.title = description[:200] if description else cve_id
+                existing.description = description
+                existing.cvss_score = cvss_score
+                existing.severity = severity
+                existing.affected_packages = affected_packages
+                existing.cwe_ids = cwe_ids
+                existing.references = references
+                existing.raw_data = cve_data
+                existing.modified_at = modified_at
+                existing.sync_status = "active"
+                return "updated"
+            else:
+                cve = CVEKnowledge(
+                    cve_id=cve_id,
+                    title=description[:200] if description else cve_id,
+                    description=description,
+                    cvss_score=cvss_score,
+                    severity=severity,
+                    affected_packages=affected_packages,
+                    cwe_ids=cwe_ids,
+                    references=references,
+                    source=source_override,
+                    raw_data=cve_data,
+                    published_at=published_at,
+                    modified_at=modified_at,
+                    sync_status="active",
+                    embedding_synced=0,
+                )
+                self.db.add(cve)
+                return "new"
+
+        except Exception as e:
+            logger.error(f"Failed to upsert CVE: {e}")
+            return None
+
+    async def _last_successful_sync_end_date(self, source: str = "nvd") -> Optional[datetime]:
+        """查询最近一次成功的同步任务的 end_date，用于增量同步起点"""
+        result = await self.db.execute(
+            select(CVESyncLog)
+            .where(CVESyncLog.source == source)
+            .where(CVESyncLog.status == "success")
+            .order_by(CVESyncLog.created_at.desc())
+            .limit(1)
+        )
+        last = result.scalar_one_or_none()
+        return last.end_date if last else None
+
+    async def sync_nvd_incremental(
+        self,
+        max_results: int = 5000,
+        severity_filter: Optional[str] = None,
+        fallback_days: int = 1825,  # 5 年
+    ) -> CVESyncLog:
+        """
+        NVD 增量同步：从上一次成功同步的 end_date 开始，拉取到当前
+
+        - 无历史成功记录时回退到 fallback_days（默认 5 年）
+        - 大于 90 天的区间会自动分段
+        """
+        end_date = datetime.utcnow()
+        last_end = await self._last_successful_sync_end_date(source="nvd")
+        if last_end:
+            # 确保 last_end 无时区（NVD API 要求 naive datetime）
+            if last_end.tzinfo is not None:
+                last_end = last_end.replace(tzinfo=None)
+            start_date = last_end
+            logger.info(f"NVD incremental: resume from last successful sync end_date={start_date}")
+        else:
+            start_date = end_date - timedelta(days=fallback_days)
+            logger.info(f"NVD incremental: no prior sync, falling back to {fallback_days} days ago")
+
+        return await self._sync_nvd_range(
+            start_date=start_date,
+            end_date=end_date,
+            max_results=max_results,
+            severity_filter=severity_filter,
+            source_label="nvd",
+        )
+
+    async def _sync_nvd_range(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        max_results: int = 5000,
+        severity_filter: Optional[str] = None,
+        keyword: Optional[str] = None,
+        source_label: str = "nvd",
+    ) -> CVESyncLog:
+        """
+        通用 NVD 区间同步，自动分片为 90 天窗口以规避 NVD 120 天限制
+        """
+        sync_log = CVESyncLog(
+            source=source_label,
+            status="running",
+            start_date=start_date,
+            end_date=end_date,
+        )
+        self.db.add(sync_log)
+        await self.db.flush()
+
+        total_new = 0
+        total_updated = 0
+        total_failed = 0
+        total_processed = 0
+
+        try:
+            # 分片：每个窗口 90 天
+            window_start = start_date
+            window_delta = timedelta(days=self.NVD_DATE_WINDOW_DAYS)
+
+            while window_start < end_date and total_processed < max_results:
+                window_end = min(window_start + window_delta, end_date)
+                logger.info(
+                    f"NVD sync window: {window_start.isoformat()} -> {window_end.isoformat()}"
+                    + (f" keyword={keyword!r}" if keyword else "")
+                )
+
+                start_index = 0
+                results_per_page = 2000
+
+                while total_processed < max_results:
+                    data = await self.nvd_client.fetch_cves(
+                        start_date=window_start,
+                        end_date=window_end,
+                        results_per_page=results_per_page,
+                        start_index=start_index,
+                        keyword=keyword,
+                        cvss_v3_severity=severity_filter,
+                    )
+
+                    vulnerabilities = data.get("vulnerabilities", [])
+                    if not vulnerabilities:
+                        break
+
+                    for vuln in vulnerabilities:
+                        cve_data = vuln.get("cve", {})
+                        outcome = await self._upsert_cve_from_nvd(cve_data)
+                        if outcome == "new":
+                            total_new += 1
+                        elif outcome == "updated":
+                            total_updated += 1
+                        else:
+                            total_failed += 1
+                        total_processed += 1
+                        if total_processed >= max_results:
+                            break
+
+                    total_results = int(data.get("totalResults", 0) or 0)
+                    start_index += len(vulnerabilities)
+                    if start_index >= total_results or not vulnerabilities:
+                        break
+
+                # 中间落库一次，防止长时间事务
+                await self.db.flush()
+                window_start = window_end
+
+            sync_log.status = "success"
+            sync_log.total_count = total_processed
+            sync_log.new_count = total_new
+            sync_log.updated_count = total_updated
+            sync_log.failed_count = total_failed
+
+            logger.info(
+                f"NVD sync completed [{source_label}]: {total_processed} processed, "
+                f"{total_new} new, {total_updated} updated, {total_failed} failed"
+            )
+
+        except Exception as e:
+            sync_log.status = "failed"
+            sync_log.error_message = str(e)
+            sync_log.total_count = total_processed
+            sync_log.new_count = total_new
+            sync_log.updated_count = total_updated
+            sync_log.failed_count = total_failed
+            logger.error(f"NVD sync [{source_label}] failed: {e}", exc_info=True)
+
+        await self.db.commit()
+        return sync_log
+
+    async def sync_by_tech_stack(
+        self,
+        keywords: Optional[List[str]] = None,
+        years: int = 5,
+        severity_filter: Optional[str] = None,
+        max_per_keyword: int = 1000,
+    ) -> CVESyncLog:
+        """
+        技术栈历史 CVE 同步：按关键词逐个从 NVD 拉取最近 N 年的漏洞
+
+        Args:
+            keywords: 关键词列表，为 None 或空时使用 DEFAULT_TECH_STACK_KEYWORDS
+            years: 回溯年数（默认 5）
+            severity_filter: 严重程度过滤
+            max_per_keyword: 单个关键词的最大结果数
+        """
+        kws = keywords or self.DEFAULT_TECH_STACK_KEYWORDS
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=years * 365)
+
+        aggregate_log = CVESyncLog(
+            source="nvd_tech_stack",
+            status="running",
+            start_date=start_date,
+            end_date=end_date,
+        )
+        self.db.add(aggregate_log)
+        await self.db.flush()
+
+        total_new = 0
+        total_updated = 0
+        total_failed = 0
+        total_processed = 0
+        failed_keywords: List[str] = []
+
+        try:
+            for kw in kws:
+                try:
+                    logger.info(f"[tech-stack] syncing keyword={kw!r} years={years}")
+                    sub_log = await self._sync_nvd_range(
+                        start_date=start_date,
+                        end_date=end_date,
+                        max_results=max_per_keyword,
+                        severity_filter=severity_filter,
+                        keyword=kw,
+                        source_label=f"nvd_tech_stack:{kw}",
+                    )
+                    total_new += int(sub_log.new_count or 0)
+                    total_updated += int(sub_log.updated_count or 0)
+                    total_failed += int(sub_log.failed_count or 0)
+                    total_processed += int(sub_log.total_count or 0)
+                    if sub_log.status != "success":
+                        failed_keywords.append(kw)
+                except Exception as e:
+                    logger.error(f"[tech-stack] keyword {kw!r} failed: {e}")
+                    failed_keywords.append(kw)
+
+            aggregate_log.status = "success" if not failed_keywords else "partial"
+            aggregate_log.total_count = total_processed
+            aggregate_log.new_count = total_new
+            aggregate_log.updated_count = total_updated
+            aggregate_log.failed_count = total_failed
+            if failed_keywords:
+                aggregate_log.error_message = f"failed keywords: {', '.join(failed_keywords)}"
+
+            logger.info(
+                f"Tech-stack sync completed: {len(kws)} keywords, "
+                f"{total_processed} processed, {total_new} new, {total_updated} updated, "
+                f"{len(failed_keywords)} keyword(s) failed"
+            )
+
+        except Exception as e:
+            aggregate_log.status = "failed"
+            aggregate_log.error_message = str(e)
+            logger.error(f"Tech-stack sync failed: {e}", exc_info=True)
+
+        await self.db.commit()
+        return aggregate_log
 
     async def sync_nvd(
         self,

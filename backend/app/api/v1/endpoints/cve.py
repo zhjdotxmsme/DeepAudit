@@ -96,6 +96,30 @@ class NVDSyncRequest(BaseModel):
     )
 
 
+class NVDIncrementalSyncRequest(BaseModel):
+    max_results: int = Field(5000, ge=1, le=50000, description="最大同步条数")
+    severity_filter: Optional[str] = Field(
+        None, description="CRITICAL/HIGH/MEDIUM/LOW，可选"
+    )
+    fallback_days: int = Field(
+        1825, ge=1, le=3650, description="无历史成功记录时回退的天数（默认 5 年）"
+    )
+
+
+class TechStackSyncRequest(BaseModel):
+    keywords: Optional[List[str]] = Field(
+        None,
+        description="关键词列表，为空时使用默认技术栈（Java/Vue/MySQL/Redis/Nacos/XXL-Job 等）",
+    )
+    years: int = Field(5, ge=1, le=10, description="回溯年数（默认 5）")
+    severity_filter: Optional[str] = Field(
+        None, description="CRITICAL/HIGH/MEDIUM/LOW，可选"
+    )
+    max_per_keyword: int = Field(
+        1000, ge=10, le=10000, description="每个关键词最大结果数"
+    )
+
+
 class OSVPackage(BaseModel):
     ecosystem: str = Field(..., description="Maven/npm/PyPI/Go/...")
     name: str
@@ -261,6 +285,40 @@ async def _run_osv_sync(packages: List[dict]) -> None:
             await svc.close()
 
 
+async def _run_nvd_incremental_sync(
+    max_results: int, severity_filter: Optional[str], fallback_days: int
+) -> None:
+    async with AsyncSessionLocal() as session:
+        svc = CVESyncService(db=session)
+        try:
+            await svc.sync_nvd_incremental(
+                max_results=max_results,
+                severity_filter=severity_filter,
+                fallback_days=fallback_days,
+            )
+        finally:
+            await svc.close()
+
+
+async def _run_tech_stack_sync(
+    keywords: Optional[List[str]],
+    years: int,
+    severity_filter: Optional[str],
+    max_per_keyword: int,
+) -> None:
+    async with AsyncSessionLocal() as session:
+        svc = CVESyncService(db=session)
+        try:
+            await svc.sync_by_tech_stack(
+                keywords=keywords,
+                years=years,
+                severity_filter=severity_filter,
+                max_per_keyword=max_per_keyword,
+            )
+        finally:
+            await svc.close()
+
+
 @router.post("/sync/nvd", response_model=SyncTriggerResponse)
 async def trigger_nvd_sync(
     payload: NVDSyncRequest,
@@ -292,4 +350,59 @@ async def trigger_osv_sync(
     background_tasks.add_task(_run_osv_sync, packages)
     return SyncTriggerResponse(
         message=f"OSV sync scheduled for {len(packages)} package(s)"
+    )
+
+
+@router.post("/sync/nvd/incremental", response_model=SyncTriggerResponse)
+async def trigger_nvd_incremental_sync(
+    payload: NVDIncrementalSyncRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """
+    异步触发 NVD 增量同步
+
+    自动从上一次成功同步的 end_date 开始拉取到当前时间；
+    若无历史成功记录，则回退到 fallback_days（默认 5 年）
+    """
+    background_tasks.add_task(
+        _run_nvd_incremental_sync,
+        payload.max_results,
+        payload.severity_filter,
+        payload.fallback_days,
+    )
+    return SyncTriggerResponse(
+        message=(
+            f"NVD incremental sync scheduled "
+            f"(max_results={payload.max_results}, fallback_days={payload.fallback_days})"
+        )
+    )
+
+
+@router.post("/sync/tech-stack", response_model=SyncTriggerResponse)
+async def trigger_tech_stack_sync(
+    payload: TechStackSyncRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """
+    异步触发技术栈历史 CVE 同步
+
+    按关键词逐个从 NVD 拉取最近 N 年的漏洞。默认关键词覆盖 Java 生态、
+    Vue2/3、MySQL、Redis、Nacos、XXL-Job 等常见技术栈。
+    """
+    kw_count = len(payload.keywords) if payload.keywords else "默认技术栈"
+    background_tasks.add_task(
+        _run_tech_stack_sync,
+        payload.keywords,
+        payload.years,
+        payload.severity_filter,
+        payload.max_per_keyword,
+    )
+    return SyncTriggerResponse(
+        message=(
+            f"Tech-stack sync scheduled "
+            f"(keywords={kw_count}, years={payload.years}, "
+            f"severity={payload.severity_filter or 'ALL'})"
+        )
     )
