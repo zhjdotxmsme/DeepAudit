@@ -39,7 +39,15 @@ class VulnerabilityReportInput(BaseModel):
     recommendation: Optional[str] = Field(default=None, description="修复建议")
     confidence: float = Field(default=0.8, description="置信度 0.0-1.0")
     cwe_id: Optional[str] = Field(default=None, description="CWE编号")
-    cvss_score: Optional[float] = Field(default=None, description="CVSS评分")
+    cvss_score: Optional[float] = Field(default=None, description="CVSS 3.1 基础分 0.0-10.0，可留空由工具依据 severity 推导")
+    cvss_vector: Optional[str] = Field(
+        default=None,
+        description="CVSS 3.1 向量，如 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H'。留空则根据 vulnerability_type + severity 自动生成典型向量"
+    )
+    owasp_category: Optional[str] = Field(
+        default=None,
+        description="OWASP Top 10 2021 分类，如 'A03:2021-Injection'。留空则根据 vulnerability_type 自动映射"
+    )
 
 
 class CreateVulnerabilityReportTool(AgentTool):
@@ -116,6 +124,8 @@ class CreateVulnerabilityReportTool(AgentTool):
         confidence: float = 0.8,
         cwe_id: Optional[str] = None,
         cvss_score: Optional[float] = None,
+        cvss_vector: Optional[str] = None,
+        owasp_category: Optional[str] = None,
         **kwargs
     ) -> ToolResult:
         """创建漏洞报告"""
@@ -171,7 +181,19 @@ class CreateVulnerabilityReportTool(AgentTool):
         
         # 验证置信度
         confidence = max(0.0, min(1.0, confidence))
-        
+
+        # 🔥 v2.2: 自动补齐 CVSS 分数/向量 + OWASP 分类
+        if cvss_score is None:
+            cvss_score = self._severity_to_cvss_score(severity)
+        else:
+            cvss_score = max(0.0, min(10.0, cvss_score))
+
+        if not cvss_vector:
+            cvss_vector = self._derive_cvss_vector(vulnerability_type, severity)
+
+        if not owasp_category:
+            owasp_category = self._derive_owasp_category(vulnerability_type)
+
         # 生成报告ID
         report_id = f"vuln_{uuid.uuid4().hex[:8]}"
         
@@ -194,6 +216,8 @@ class CreateVulnerabilityReportTool(AgentTool):
             "confidence": confidence,
             "cwe_id": cwe_id,
             "cvss_score": cvss_score,
+            "cvss_vector": cvss_vector,
+            "owasp_category": owasp_category,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "is_verified": True,  # 通过此工具创建的都视为已验证
         }
@@ -223,6 +247,123 @@ class CreateVulnerabilityReportTool(AgentTool):
             metadata=report,
         )
     
+    # ------------------------------------------------------------
+    # CVSS / OWASP 自动派生
+    # ------------------------------------------------------------
+    _SEVERITY_TO_SCORE = {
+        "critical": 9.8,
+        "high": 7.5,
+        "medium": 5.3,
+        "low": 3.1,
+        "info": 0.0,
+    }
+
+    # OWASP Top 10 2021 映射：漏洞类型 -> A0X:2021 分类
+    _OWASP_MAP = {
+        # A01: Broken Access Control
+        "idor": "A01:2021-Broken Access Control",
+        "auth_bypass": "A01:2021-Broken Access Control",
+        "path_traversal": "A01:2021-Broken Access Control",
+        "csrf": "A01:2021-Broken Access Control",
+        "file_inclusion": "A01:2021-Broken Access Control",
+        # A02: Cryptographic Failures
+        "weak_crypto": "A02:2021-Cryptographic Failures",
+        "sensitive_data_exposure": "A02:2021-Cryptographic Failures",
+        "hardcoded_secret": "A02:2021-Cryptographic Failures",
+        # A03: Injection
+        "sql_injection": "A03:2021-Injection",
+        "nosql_injection": "A03:2021-Injection",
+        "xss": "A03:2021-Injection",
+        "command_injection": "A03:2021-Injection",
+        "code_injection": "A03:2021-Injection",
+        # A04: Insecure Design（业务逻辑）
+        "business_logic": "A04:2021-Insecure Design",
+        "race_condition": "A04:2021-Insecure Design",
+        # A05: Security Misconfiguration
+        "xxe": "A05:2021-Security Misconfiguration",
+        # A07: Identification and Authentication Failures
+        "broken_auth": "A07:2021-Identification and Authentication Failures",
+        # A08: Software and Data Integrity Failures
+        "deserialization": "A08:2021-Software and Data Integrity Failures",
+        "mass_assignment": "A08:2021-Software and Data Integrity Failures",
+        # A10: SSRF
+        "ssrf": "A10:2021-Server-Side Request Forgery",
+        "open_redirect": "A10:2021-Server-Side Request Forgery",
+    }
+
+    # 典型 CVSS 3.1 向量模板（vuln_type -> {severity: vector}）
+    # 覆盖不到的类型 fallback 到 _severity_to_generic_vector
+    _CVSS_VECTOR_MAP = {
+        "sql_injection": {
+            "critical": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "high":     "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+            "medium":   "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N",
+        },
+        "command_injection": {
+            "critical": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+            "high":     "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H",
+        },
+        "code_injection": {
+            "critical": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+            "high":     "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H",
+        },
+        "deserialization": {
+            "critical": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+            "high":     "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H",
+        },
+        "xss": {
+            "high":   "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+            "medium": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N",
+        },
+        "ssrf": {
+            "high":   "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:L/A:N",
+            "medium": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N",
+        },
+        "path_traversal": {
+            "high":   "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            "medium": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N",
+        },
+        "idor": {
+            "high":   "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+            "medium": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N",
+        },
+        "auth_bypass": {
+            "critical": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+            "high":     "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+        },
+        "hardcoded_secret": {
+            "high":   "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            "medium": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N",
+        },
+        "xxe": {
+            "high":   "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:N/A:N",
+        },
+    }
+
+    _GENERIC_VECTOR = {
+        "critical": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        "high":     "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N",
+        "medium":   "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N",
+        "low":      "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:U/C:L/I:N/A:N",
+        "info":     "CVSS:3.1/AV:N/AC:H/PR:H/UI:R/S:U/C:N/I:N/A:N",
+    }
+
+    def _severity_to_cvss_score(self, severity: str) -> float:
+        return self._SEVERITY_TO_SCORE.get(severity, 5.0)
+
+    def _derive_cvss_vector(self, vuln_type: str, severity: str) -> str:
+        vt_map = self._CVSS_VECTOR_MAP.get(vuln_type, {})
+        vec = vt_map.get(severity)
+        if vec:
+            return vec
+        # 退化：拿到该 vuln_type 的最接近严重度向量
+        if vt_map:
+            return next(iter(vt_map.values()))
+        return self._GENERIC_VECTOR.get(severity, self._GENERIC_VECTOR["medium"])
+
+    def _derive_owasp_category(self, vuln_type: str) -> str:
+        return self._OWASP_MAP.get(vuln_type, "A04:2021-Insecure Design")
+
     def _get_default_recommendation(self, vuln_type: str) -> str:
         """获取默认修复建议"""
         recommendations = {
