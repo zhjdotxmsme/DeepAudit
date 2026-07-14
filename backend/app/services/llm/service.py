@@ -1034,8 +1034,7 @@ Please analyze the following code:
             db_session: 数据库会话
             use_default_template: 当没有指定模板时是否使用数据库中的默认模板
         """
-        custom_prompt = None
-        rules = None
+        enrichment_parts = []
         
         if db_session:
             from sqlalchemy.future import select
@@ -1088,6 +1087,50 @@ Please analyze the following code:
                         }
                         for r in rule_set.rules if r.enabled
                     ]
+                
+                # 🔥 Skill enrichment
+                if rule_set and rule_set.enable_skill_enrichment and rule_set.skill_names:
+                    import json as _json
+                    from app.services.agent.skills.loader import get_default_loader
+                    skill_names = _json.loads(rule_set.skill_names) if rule_set.skill_names else []
+                    if skill_names:
+                        loader = get_default_loader()
+                        skill_parts = []
+                        for name in skill_names:
+                            skill = loader.get(name)
+                            if skill:
+                                skill_parts.append(f"### Skill: {skill.metadata.name}\n{skill.body}")
+                        if skill_parts:
+                            enrichment_parts.append("## 参考安全技能知识\n\n" + "\n\n".join(skill_parts))
+                
+                # 🔥 CVE enrichment
+                if rule_set and rule_set.enable_cve_enrichment:
+                    from app.models.cve_knowledge import CVEKnowledge
+                    min_sev = (rule_set.cve_min_severity or "HIGH").upper()
+                    cve_sources = []
+                    if rule_set.cve_sources:
+                        import json as _json
+                        cve_sources = _json.loads(rule_set.cve_sources)
+                    sev_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+                    min_rank = sev_rank.get(min_sev, 3)
+                    allowed_sevs = [s for s, r in sev_rank.items() if r >= min_rank]
+                    cve_query = (
+                        select(CVEKnowledge)
+                        .where(CVEKnowledge.severity.in_(allowed_sevs))
+                        .where(CVEKnowledge.sync_status == "active")
+                        .order_by(CVEKnowledge.published_at.desc().nullslast())
+                        .limit(20)
+                    )
+                    if cve_sources:
+                        cve_query = cve_query.where(CVEKnowledge.source.in_([s.lower() for s in cve_sources]))
+                    cve_rows = (await db_session.execute(cve_query)).scalars().all()
+                    if cve_rows:
+                        cve_lines = [f"- {c.cve_id} ({c.severity}): {c.title or c.description or ''}" for c in cve_rows]
+                        enrichment_parts.append("## 近期相关 CVE 参考\n\n" + "\n".join(cve_lines))
+        
+        # 如果有 enrichment，追加到 custom_prompt
+        if enrichment_parts and custom_prompt:
+            custom_prompt = custom_prompt + "\n\n" + "\n\n".join(enrichment_parts) + "\n\n"
         
         # 如果有自定义提示词，使用自定义分析
         if custom_prompt:

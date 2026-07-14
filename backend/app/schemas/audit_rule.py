@@ -67,6 +67,12 @@ class AuditRuleSetBase(BaseModel):
     )
     is_active: bool = Field(True, description="是否启用")
     sort_order: int = Field(0, description="排序权重")
+    # Skill & CVE enrichment
+    skill_names: Optional[List[str]] = Field(default_factory=list, description="启用的 Skill 名称列表")
+    enable_skill_enrichment: bool = Field(False, description="是否启用 Skill enrichment")
+    cve_min_severity: str = Field("HIGH", description="CVE 最小严重程度: CRITICAL/HIGH/MEDIUM/LOW")
+    cve_sources: Optional[List[str]] = Field(default_factory=list, description="CVE 来源列表: nvd/osv/github_advisory/cnvd")
+    enable_cve_enrichment: bool = Field(False, description="是否启用 CVE enrichment")
 
 
 class AuditRuleSetCreate(AuditRuleSetBase):
@@ -84,6 +90,11 @@ class AuditRuleSetUpdate(BaseModel):
     is_default: Optional[bool] = None
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
+    skill_names: Optional[List[str]] = None
+    enable_skill_enrichment: Optional[bool] = None
+    cve_min_severity: Optional[str] = None
+    cve_sources: Optional[List[str]] = None
+    enable_cve_enrichment: Optional[bool] = None
 
 
 class AuditRuleSetResponse(AuditRuleSetBase):
@@ -115,6 +126,11 @@ class AuditRuleSetExport(BaseModel):
     language: str
     rule_type: str
     severity_weights: Dict[str, int]
+    skill_names: Optional[List[str]] = None
+    enable_skill_enrichment: bool = False
+    cve_min_severity: str = "HIGH"
+    cve_sources: Optional[List[str]] = None
+    enable_cve_enrichment: bool = False
     rules: List[AuditRuleBase]
     export_version: str = "1.0"
 
@@ -126,4 +142,9 @@ class AuditRuleSetImport(BaseModel):
     language: str = "all"
     rule_type: str = "custom"
     severity_weights: Optional[Dict[str, int]] = None
+    skill_names: Optional[List[str]] = None
+    enable_skill_enrichment: bool = False
+    cve_min_severity: str = "HIGH"
+    cve_sources: Optional[List[str]] = None
+    enable_cve_enrichment: bool = False
     rules: List[AuditRuleCreate]
