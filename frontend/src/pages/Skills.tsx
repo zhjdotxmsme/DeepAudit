@@ -26,14 +26,29 @@ import {
   Layers,
   Folder,
   Activity,
+  GitBranch,
+  Upload,
+  Store,
+  Trash2,
+  Download,
+  BellRing,
 } from 'lucide-react';
 import {
   listSkills,
   getSkill,
   getSkillReference,
   reloadSkills,
+  importSkillFromGit,
+  importSkillFromZip,
+  fetchRegistrySkills,
+  installSkillFromRegistry,
+  deleteSkill,
+  updateSkill,
+  checkSkillUpdates,
   type SkillSummary,
   type SkillDetail,
+  type RegistrySkillItem,
+  type SkillUpdateCheckItem,
 } from '@/shared/api/skills';
 
 const SEVERITY_COLOR: Record<string, string> = {
@@ -71,6 +86,33 @@ export default function Skills() {
   const [refOpen, setRefOpen] = useState(false);
   const [refContent, setRefContent] = useState<{ path: string; content: string } | null>(null);
   const [refLoading, setRefLoading] = useState(false);
+
+  // Import from Git
+  const [gitOpen, setGitOpen] = useState(false);
+  const [gitUrl, setGitUrl] = useState('');
+  const [gitName, setGitName] = useState('');
+  const [gitBranch, setGitBranch] = useState('');
+  const [gitSubdir, setGitSubdir] = useState('');
+  const [gitSubmitting, setGitSubmitting] = useState(false);
+
+  // Import from Zip
+  const [zipSubmitting, setZipSubmitting] = useState(false);
+
+  // Registry browser
+  const [registryOpen, setRegistryOpen] = useState(false);
+  const [registryUrl, setRegistryUrl] = useState('');
+  const [registryItems, setRegistryItems] = useState<RegistrySkillItem[]>([]);
+  const [registryLoading, setRegistryLoading] = useState(false);
+  const [installingName, setInstallingName] = useState<string | null>(null);
+
+  // Delete confirmation
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // Update
+  const [updatingName, setUpdatingName] = useState<string | null>(null);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<Record<string, SkillUpdateCheckItem>>({});
 
   const load = async () => {
     try {
@@ -136,6 +178,145 @@ export default function Skills() {
       setRefOpen(false);
     } finally {
       setRefLoading(false);
+    }
+  };
+
+  const resetGitForm = () => {
+    setGitUrl('');
+    setGitName('');
+    setGitBranch('');
+    setGitSubdir('');
+  };
+
+  const handleImportFromGit = async () => {
+    if (!gitUrl.trim()) {
+      toast.error('请填写 Git URL');
+      return;
+    }
+    setGitSubmitting(true);
+    try {
+      const res = await importSkillFromGit({
+        git_url: gitUrl.trim(),
+        name: gitName.trim() || undefined,
+        branch: gitBranch.trim() || undefined,
+        subdir: gitSubdir.trim() || undefined,
+      });
+      toast.success(`已导入 Skill: ${res.name} v${res.version}`);
+      setGitOpen(false);
+      resetGitForm();
+      await load();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || 'Git 导入失败');
+    } finally {
+      setGitSubmitting(false);
+    }
+  };
+
+  const handleImportFromZip = async (file: File) => {
+    setZipSubmitting(true);
+    try {
+      const res = await importSkillFromZip(file);
+      toast.success(`已导入 Skill: ${res.name} v${res.version}`);
+      await load();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || 'Zip 导入失败');
+    } finally {
+      setZipSubmitting(false);
+    }
+  };
+
+  const handleOpenRegistry = async () => {
+    setRegistryOpen(true);
+    setRegistryItems([]);
+    setRegistryLoading(true);
+    try {
+      const res = await fetchRegistrySkills(registryUrl.trim() || undefined);
+      setRegistryItems(res.skills || []);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || '拉取 Registry 失败');
+    } finally {
+      setRegistryLoading(false);
+    }
+  };
+
+  const handleRefreshRegistry = async () => {
+    setRegistryLoading(true);
+    setRegistryItems([]);
+    try {
+      const res = await fetchRegistrySkills(registryUrl.trim() || undefined);
+      setRegistryItems(res.skills || []);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || '拉取 Registry 失败');
+    } finally {
+      setRegistryLoading(false);
+    }
+  };
+
+  const handleInstallFromRegistry = async (name: string) => {
+    setInstallingName(name);
+    try {
+      const res = await installSkillFromRegistry(name, registryUrl.trim() || undefined);
+      toast.success(`已安装 Skill: ${res.name} v${res.version}`);
+      await load();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || '安装失败');
+    } finally {
+      setInstallingName(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await deleteSkill(deleteTarget);
+      toast.success(`已删除 Skill: ${deleteTarget}`);
+      setDeleteTarget(null);
+      await load();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || '删除失败');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleUpdate = async (name: string) => {
+    setUpdatingName(name);
+    try {
+      const res = await updateSkill(name);
+      toast.success(`已更新 Skill: ${res.name} v${res.version}`);
+      // clear this skill's update flag
+      setUpdateInfo((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      await load();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || '更新失败（需要该 Skill 记录了 git 源）');
+    } finally {
+      setUpdatingName(null);
+    }
+  };
+
+  const handleCheckUpdates = async () => {
+    setCheckingUpdates(true);
+    try {
+      const res = await checkSkillUpdates();
+      const map: Record<string, SkillUpdateCheckItem> = {};
+      res.items.forEach((it) => (map[it.name] = it));
+      setUpdateInfo(map);
+      if (res.updates_available > 0) {
+        toast.success(`发现 ${res.updates_available} 个 Skill 有可用更新`);
+      } else if (res.count === 0) {
+        toast('没有 git 来源的 Skill，无需检查更新');
+      } else {
+        toast.success('所有 git 来源的 Skill 都是最新的');
+      }
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || '检查更新失败');
+    } finally {
+      setCheckingUpdates(false);
     }
   };
 
@@ -222,7 +403,46 @@ export default function Skills() {
           <span className="text-xs text-muted-foreground ml-3 normal-case">
             文件系统承载 · 只读 + Reload · SKILL.md 格式
           </span>
-          <div className="ml-auto flex gap-2">
+          <div className="ml-auto flex gap-2 flex-wrap">
+            <Button
+              onClick={() => setGitOpen(true)}
+              className="cyber-btn-primary h-9"
+            >
+              <GitBranch className="w-4 h-4 mr-2" />
+              从 Git 导入
+            </Button>
+            <label className="cursor-pointer">
+              <input
+                type="file"
+                accept=".zip"
+                className="hidden"
+                disabled={zipSubmitting}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleImportFromZip(f);
+                  e.target.value = '';
+                }}
+              />
+              <span className="cyber-btn-primary h-9 inline-flex items-center px-4 rounded text-sm font-medium">
+                <Upload className={`w-4 h-4 mr-2 ${zipSubmitting ? 'animate-spin' : ''}`} />
+                上传 Zip
+              </span>
+            </label>
+            <Button
+              onClick={handleOpenRegistry}
+              className="cyber-btn-primary h-9"
+            >
+              <Store className="w-4 h-4 mr-2" />
+              Registry 浏览
+            </Button>
+            <Button
+              onClick={handleCheckUpdates}
+              disabled={checkingUpdates}
+              className="cyber-btn-primary h-9"
+            >
+              <BellRing className={`w-4 h-4 mr-2 ${checkingUpdates ? 'animate-spin' : ''}`} />
+              检查更新
+            </Button>
             <Button
               onClick={handleReload}
               disabled={reloading}
@@ -295,6 +515,11 @@ export default function Skills() {
         ) : (
           skills.map((s) => {
             const targets = formatTargets(s.targets);
+            const upd = updateInfo[s.name];
+            const hasUpdate = !!upd?.has_update;
+            const src = s.source;
+            const hasGitSource = !!src?.git_url;
+            const updatedAt = src?.updated_at || src?.installed_at;
             return (
               <div
                 key={s.name}
@@ -318,7 +543,7 @@ export default function Skills() {
                     </div>
                     <Badge className="cyber-badge-muted flex-shrink-0 ml-2">v{s.version}</Badge>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2 items-center">
                     {s.category && <Badge className="cyber-badge-info">{s.category}</Badge>}
                     {s.severity_focus.map((sev) => (
                       <Badge
@@ -328,6 +553,18 @@ export default function Skills() {
                         {sev}
                       </Badge>
                     ))}
+                    {hasGitSource && (
+                      <Badge className="cyber-badge-muted" title={src?.git_url}>
+                        <GitBranch className="w-3 h-3 mr-1" />
+                        {src?.branch || 'git'}
+                      </Badge>
+                    )}
+                    {hasUpdate && (
+                      <Badge className="cyber-badge-warning animate-pulse" title={`local ${upd?.local_commit?.slice(0, 7) || '—'} → remote ${upd?.remote_commit?.slice(0, 7) || '—'}`}>
+                        <BellRing className="w-3 h-3 mr-1" />
+                        有新版本
+                      </Badge>
+                    )}
                   </div>
                 </div>
 
@@ -364,6 +601,36 @@ export default function Skills() {
                         #{s.tags.slice(0, 2).join(' #')}
                       </span>
                     )}
+                  </div>
+                  {updatedAt && (
+                    <div className="text-[10px] text-muted-foreground font-mono">
+                      {src?.updated_at ? '更新于' : '安装于'}: {new Date(updatedAt).toLocaleString()}
+                    </div>
+                  )}
+                  <div
+                    className="flex items-center gap-2 pt-2 border-t border-border"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={updatingName === s.name || !hasGitSource}
+                      onClick={() => handleUpdate(s.name)}
+                      className={`h-7 px-2 text-xs ${hasUpdate ? 'text-amber-400 hover:bg-amber-500/10' : 'text-sky-400 hover:bg-sky-500/10'}`}
+                      title={hasGitSource ? (hasUpdate ? '有新版本可用，点击更新' : '从 Git 源拉取最新') : '此 Skill 无 Git 源，无法自动更新'}
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 mr-1 ${updatingName === s.name ? 'animate-spin' : ''}`} />
+                      {hasUpdate ? '有更新' : '更新'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setDeleteTarget(s.name)}
+                      className="h-7 px-2 text-xs text-red-400 hover:bg-red-500/10 ml-auto"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-1" />
+                      删除
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -542,6 +809,209 @@ export default function Skills() {
               </pre>
             </ScrollArea>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      {/* Import from Git Dialog */}
+      <Dialog open={gitOpen} onOpenChange={(o) => { setGitOpen(o); if (!o) resetGitForm(); }}>
+        <DialogContent className="!w-[min(95vw,600px)] !max-w-none cyber-dialog border border-border rounded-lg">
+          <DialogHeader className="px-6 py-4 border-b border-border bg-muted">
+            <DialogTitle className="flex items-center gap-3 font-mono text-foreground">
+              <div className="p-2 bg-primary/20 rounded border border-primary/30">
+                <GitBranch className="w-5 h-5 text-primary" />
+              </div>
+              <span className="text-base font-bold uppercase tracking-wider">从 Git 导入 Skill</span>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="p-6 space-y-4">
+            <div className="space-y-2">
+              <Label className="text-xs font-bold uppercase text-muted-foreground">
+                Git URL <span className="text-red-400">*</span>
+              </Label>
+              <Input
+                value={gitUrl}
+                onChange={(e) => setGitUrl(e.target.value)}
+                placeholder="https://github.com/xxx/skill-repo.git"
+                className="cyber-input"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label className="text-xs font-bold uppercase text-muted-foreground">名称（可选）</Label>
+                <Input
+                  value={gitName}
+                  onChange={(e) => setGitName(e.target.value)}
+                  placeholder="覆盖 SKILL.md name"
+                  className="cyber-input"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-bold uppercase text-muted-foreground">分支（可选）</Label>
+                <Input
+                  value={gitBranch}
+                  onChange={(e) => setGitBranch(e.target.value)}
+                  placeholder="main / master"
+                  className="cyber-input"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold uppercase text-muted-foreground">子目录（可选）</Label>
+              <Input
+                value={gitSubdir}
+                onChange={(e) => setGitSubdir(e.target.value)}
+                placeholder="仓库中 SKILL.md 所在子目录"
+                className="cyber-input"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setGitOpen(false)} className="h-9">
+                取消
+              </Button>
+              <Button
+                onClick={handleImportFromGit}
+                disabled={gitSubmitting || !gitUrl.trim()}
+                className="cyber-btn-primary h-9"
+              >
+                {gitSubmitting ? (
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4 mr-2" />
+                )}
+                导入
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Registry Browser Dialog */}
+      <Dialog open={registryOpen} onOpenChange={setRegistryOpen}>
+        <DialogContent className="!w-[min(95vw,900px)] !max-w-none max-h-[85vh] flex flex-col p-0 gap-0 cyber-dialog border border-border rounded-lg">
+          <DialogHeader className="px-6 py-4 border-b border-border flex-shrink-0 bg-muted">
+            <DialogTitle className="flex items-center gap-3 font-mono text-foreground">
+              <div className="p-2 bg-primary/20 rounded border border-primary/30">
+                <Store className="w-5 h-5 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <span className="text-base font-bold uppercase tracking-wider truncate block">
+                  Skill Registry
+                </span>
+                <p className="text-xs text-muted-foreground font-normal mt-0.5">
+                  可用 Skill 目录 · 一键安装
+                </p>
+              </div>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="p-4 border-b border-border flex-shrink-0 flex gap-2">
+            <Input
+              value={registryUrl}
+              onChange={(e) => setRegistryUrl(e.target.value)}
+              placeholder="Registry URL（留空使用默认）"
+              className="cyber-input flex-1"
+            />
+            <Button
+              onClick={handleRefreshRegistry}
+              disabled={registryLoading}
+              className="cyber-btn-primary h-10"
+            >
+              <RefreshCw className={`w-4 h-4 mr-2 ${registryLoading ? 'animate-spin' : ''}`} />
+              刷新
+            </Button>
+          </div>
+          <ScrollArea className="flex-1">
+            {registryLoading ? (
+              <div className="flex-1 flex items-center justify-center py-16">
+                <div className="loading-spinner" />
+              </div>
+            ) : registryItems.length === 0 ? (
+              <div className="text-center text-muted-foreground text-sm py-16">
+                （空）点击"刷新"从 Registry 拉取
+              </div>
+            ) : (
+              <div className="p-4 space-y-3">
+                {registryItems.map((item) => (
+                  <div key={item.name} className="cyber-card p-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h4 className="font-bold text-foreground uppercase truncate">{item.name}</h4>
+                          <Badge className="cyber-badge-muted text-xs">v{item.version}</Badge>
+                          {item.category && (
+                            <Badge className="cyber-badge-info text-xs">{item.category}</Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground line-clamp-2">
+                          {item.description || '(无描述)'}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => handleInstallFromRegistry(item.name)}
+                        disabled={installingName === item.name}
+                        className="cyber-btn-primary h-8 flex-shrink-0"
+                      >
+                        {installingName === item.name ? (
+                          <RefreshCw className="w-3.5 h-3.5 mr-1 animate-spin" />
+                        ) : (
+                          <Download className="w-3.5 h-3.5 mr-1" />
+                        )}
+                        安装
+                      </Button>
+                    </div>
+                    <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
+                      {item.author && <span>作者: {item.author}</span>}
+                      {item.tags?.map((t) => (
+                        <Badge key={t} className="cyber-badge-muted text-xs">#{t}</Badge>
+                      ))}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-2 truncate font-mono" title={item.source}>
+                      源: {item.source}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <DialogContent className="!w-[min(95vw,480px)] !max-w-none cyber-dialog border border-border rounded-lg">
+          <DialogHeader className="px-6 py-4 border-b border-border bg-muted">
+            <DialogTitle className="flex items-center gap-3 font-mono text-foreground">
+              <div className="p-2 bg-red-500/20 rounded border border-red-500/30">
+                <Trash2 className="w-5 h-5 text-red-400" />
+              </div>
+              <span className="text-base font-bold uppercase tracking-wider">删除 Skill</span>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="p-6 space-y-4">
+            <p className="text-sm text-foreground">
+              确定要删除 Skill <span className="text-red-400 font-bold">{deleteTarget}</span> 吗？
+            </p>
+            <p className="text-xs text-muted-foreground">
+              此操作会从可写 skills 目录移除该包，无法从 UI 恢复（可重新 Git/Zip/Registry 导入）。
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setDeleteTarget(null)} className="h-9">
+                取消
+              </Button>
+              <Button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="cyber-btn-danger h-9 bg-red-500/20 border border-red-500/40 text-red-300 hover:bg-red-500/30"
+              >
+                {deleting ? (
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Trash2 className="w-4 h-4 mr-2" />
+                )}
+                确认删除
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

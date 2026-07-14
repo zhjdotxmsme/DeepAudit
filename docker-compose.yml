@@ -42,6 +42,7 @@ services:
     restart: unless-stopped
     volumes:
       # - ./backend/app:/app/app:ro  # 挂载代码目录，修改后自动生效
+      - ./skills:/app/skills:rw      # 挂载 skills 知识包目录（rw：支持从 Git/Registry 导入与更新）
       - backend_uploads:/app/uploads
       - /var/run/docker.sock:/var/run/docker.sock # 沙箱执行必须
     ports:

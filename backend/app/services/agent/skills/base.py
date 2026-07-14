@@ -33,6 +33,7 @@ SKILL.md 结构：
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field, asdict
@@ -104,6 +105,7 @@ class Skill:
     body: str  # SKILL.md frontmatter 之后的 Markdown 正文
     root_dir: Path
     files: List[SkillFile] = field(default_factory=list)
+    source: Dict[str, Any] = field(default_factory=dict)  # 安装来源 sidecar
 
     @property
     def name(self) -> str:
@@ -122,6 +124,7 @@ class Skill:
             "tags": self.metadata.tags,
             "reference_count": sum(1 for f in self.files if f.kind == "reference"),
             "script_count": sum(1 for f in self.files if f.kind == "script"),
+            "source": self.source,
         }
 
     def to_dict(self, include_body: bool = True) -> Dict[str, Any]:
@@ -129,6 +132,7 @@ class Skill:
             "metadata": self.metadata.to_dict(),
             "files": [f.to_dict() for f in self.files],
             "root_dir": str(self.root_dir),
+            "source": self.source,
         }
         if include_body:
             data["body"] = self.body
@@ -206,6 +210,30 @@ def _collect_skill_files(root: Path) -> List[SkillFile]:
     return files
 
 
+def _read_source_sidecar(skill_dir: Path) -> Dict[str, Any]:
+    """读取 .skill-source.json 侧车文件（记录安装来源与时间戳）。缺失时读取目录 mtime 兜底。"""
+    sidecar = skill_dir / ".skill-source.json"
+    data: Dict[str, Any] = {}
+    if sidecar.is_file():
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, json.JSONDecodeError) as e:  # noqa: BLE001
+            logger.warning("Read skill source sidecar failed %s: %s", sidecar, e)
+            data = {}
+    # 缺失字段用目录 mtime 兜底
+    if "updated_at" not in data:
+        try:
+            import datetime as _dt
+            data["updated_at"] = _dt.datetime.utcfromtimestamp(
+                skill_dir.stat().st_mtime
+            ).isoformat() + "Z"
+        except OSError:
+            pass
+    return data
+
+
 def load_skill_from_dir(skill_dir: Path) -> Skill:
     """从一个 skill 目录加载 Skill 对象"""
     skill_dir = skill_dir.resolve()
@@ -220,4 +248,5 @@ def load_skill_from_dir(skill_dir: Path) -> Skill:
     fm, body = _parse_frontmatter(text)
     metadata = SkillMetadata.from_dict(fm)
     files = _collect_skill_files(skill_dir)
-    return Skill(metadata=metadata, body=body, root_dir=skill_dir, files=files)
+    source = _read_source_sidecar(skill_dir)
+    return Skill(metadata=metadata, body=body, root_dir=skill_dir, files=files, source=source)
