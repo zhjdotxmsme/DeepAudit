@@ -462,6 +462,252 @@ class PatternMatchTool(AgentTool):
             "description": "前端代码注入：使用eval或Function执行动态字符串",
             "cwe_id": "CWE-94",
         },
+
+        # ==================== Java 生态扩展 (v3.0) ====================
+
+        # MyBatis 注入
+        "mybatis_dollar_injection": {
+            "patterns": {
+                "java": [
+                    (r'@Select\s*\(\s*["\'][^"\']*\$\{', "@Select 使用 ${} 拼接"),
+                    (r'@Update\s*\(\s*["\'][^"\']*\$\{', "@Update 使用 ${} 拼接"),
+                    (r'@Delete\s*\(\s*["\'][^"\']*\$\{', "@Delete 使用 ${} 拼接"),
+                    (r'@Insert\s*\(\s*["\'][^"\']*\$\{', "@Insert 使用 ${} 拼接"),
+                ],
+                "xml": [
+                    (r'\$\{[^}]*\}', "MyBatis XML 使用 ${} (非预编译)"),
+                    (r'order\s+by\s+\$\{', "orderBy 使用 ${} 注入点"),
+                    (r'<sql\s+id\s*=[^>]*>[^<]*\$\{', "sql 片段中 ${} 拼接"),
+                ],
+            },
+            "severity": "critical",
+            "description": "MyBatis SQL 注入：${} 未预编译，用户可控则可直接注入 SQL（应使用 #{}）",
+            "cwe_id": "CWE-89",
+        },
+
+        # Fastjson / Jackson 反序列化
+        "java_json_deserialization": {
+            "patterns": {
+                "java": [
+                    (r'JSON\.parseObject\s*\([^,)]+,\s*Object\.class', "Fastjson parseObject(Object.class)"),
+                    (r'JSON\.parse\s*\(', "Fastjson JSON.parse 无白名单"),
+                    (r'ParserConfig\.[^.]*\.setAutoTypeSupport\s*\(\s*true', "Fastjson autoType 开启"),
+                    (r'@type["\']?\s*:', "Fastjson @type 反序列化标记"),
+                    (r'ObjectMapper\s*\(\s*\)[^;]*\.enableDefaultTyping', "Jackson enableDefaultTyping"),
+                    (r'\.activateDefaultTyping\s*\(', "Jackson activateDefaultTyping"),
+                ],
+            },
+            "severity": "critical",
+            "description": "Fastjson/Jackson 反序列化 RCE：autoType/DefaultTyping 允许 @type 指定任意类",
+            "cwe_id": "CWE-502",
+        },
+
+        # Log4Shell / JNDI 注入
+        "log4j_jndi_injection": {
+            "patterns": {
+                "java": [
+                    (r'logger\.\w+\s*\([^)]*\+[^)]*\)', "Log4j 日志拼接用户输入"),
+                    (r'log\.\w+\s*\([^)]*\+[^)]*\)', "log.xxx 拼接用户输入"),
+                    (r'\$\{jndi:', "JNDI 表达式（Log4Shell payload）"),
+                    (r'\$\{[a-zA-Z:]*ldap:', "JNDI ldap payload"),
+                    (r'\$\{[a-zA-Z:]*rmi:', "JNDI rmi payload"),
+                    (r'InitialContext\s*\(\s*\)\.lookup\s*\(', "InitialContext.lookup 直接调用"),
+                ],
+            },
+            "severity": "critical",
+            "description": "Log4Shell / JNDI 注入：Log4j 表达式解析或直接 JNDI lookup，可导致远程类加载",
+            "cwe_id": "CWE-917",
+        },
+
+        # Nacos 默认凭据 / 未授权
+        "nacos_misconfig": {
+            "patterns": {
+                "java": [
+                    (r'nacos\.core\.auth\.enabled\s*=\s*false', "Nacos 鉴权关闭"),
+                    (r'nacos\.core\.auth\.enable\.userAgentAuthWhite\s*=\s*true', "Nacos User-Agent 白名单绕过"),
+                    (r'nacos\.core\.auth\.server\.identity\.key\s*=\s*serverIdentity', "Nacos 默认 identity"),
+                ],
+                "yaml": [
+                    (r'auth:\s*\n\s*enabled:\s*false', "YAML: Nacos auth.enabled=false"),
+                    (r'nacos:\s*nacos', "Nacos 默认凭据 nacos:nacos"),
+                ],
+                "properties": [
+                    (r'nacos\.core\.auth\.enabled=false', "Nacos auth 关闭"),
+                    (r'server\.servlet\.context-path=/nacos', "Nacos 默认 contextPath"),
+                ],
+            },
+            "severity": "high",
+            "description": "Nacos 配置缺陷：鉴权关闭、默认凭据 nacos:nacos、User-Agent 绕过（CVE-2021-29441）",
+            "cwe_id": "CWE-798",
+        },
+
+        # XXL-Job 未授权 / RCE
+        "xxljob_misconfig": {
+            "patterns": {
+                "java": [
+                    (r'xxl\.job\.accessToken\s*=\s*["\']?\s*["\']?\s*$', "XXL-Job accessToken 为空"),
+                    (r'xxl\.job\.executor\.port\s*=\s*9999', "XXL-Job 默认执行端口"),
+                    (r'GlueTypeEnum\.GLUE_(GROOVY|SHELL|PYTHON|POWERSHELL)', "XXL-Job 动态脚本执行（Glue）"),
+                ],
+                "properties": [
+                    (r'xxl\.job\.accessToken=$', "XXL-Job token 为空"),
+                    (r'xxl\.job\.admin\.addresses=http://[^/]+:8080/xxl-job-admin', "XXL-Job 默认 admin"),
+                ],
+            },
+            "severity": "critical",
+            "description": "XXL-Job 未授权 RCE：Executor 端口 9999 无 token 保护，或使用 GLUE 动态脚本注入",
+            "cwe_id": "CWE-306",
+        },
+
+        # Shiro rememberMe / 路径绕过
+        "shiro_misconfig": {
+            "patterns": {
+                "java": [
+                    (r'kPH\+bIxk5D2deZiIxcaaaA==', "Shiro 默认 rememberMe key"),
+                    (r'setCipherKey\s*\(\s*Base64\.decode\s*\(\s*["\']kPH', "Shiro 默认 cipherKey"),
+                    (r'CookieRememberMeManager', "Shiro CookieRememberMeManager (检查 key)"),
+                    (r'/\w+/\.\.;/', "Shiro 分号路径绕过 payload"),
+                    (r'anon\s*=\s*/', "Shiro anon 放行路径"),
+                ],
+                "properties": [
+                    (r'shiro\.rememberMe\.cipherKey=kPH', "Shiro 默认 rememberMe cipherKey"),
+                ],
+            },
+            "severity": "critical",
+            "description": "Shiro 反序列化 / 认证绕过：默认 key rememberMe RCE、;/ 路径绕过（CVE-2020-1957/CVE-2016-4437）",
+            "cwe_id": "CWE-502",
+        },
+
+        # Spring Cloud Gateway / Config
+        "spring_cloud_misconfig": {
+            "patterns": {
+                "java": [
+                    (r'@RequestMapping\s*\(\s*["\']/actuator/gateway', "Spring Cloud Gateway actuator 端点"),
+                    (r'spring\.cloud\.gateway\.actuator\.verbose\.enabled\s*=\s*true', "Gateway actuator verbose"),
+                    (r'management\.endpoint\.gateway\.enabled\s*=\s*true', "Gateway management 启用"),
+                    (r'\.filters\s*\(.*SpelExpressionParser', "Gateway filter 中 SpEL 解析（CVE-2022-22947）"),
+                    (r'spring\.cloud\.config\.server\.git\.uri', "Config Server git uri（检查 SSRF）"),
+                ],
+                "yaml": [
+                    (r'gateway:\s*\n[^#]*actuator:', "YAML Gateway actuator 暴露"),
+                ],
+            },
+            "severity": "critical",
+            "description": "Spring Cloud Gateway/Config 缺陷：CVE-2022-22947 SpEL RCE、Config Server 未授权",
+            "cwe_id": "CWE-917",
+        },
+
+        # Feign / RestTemplate SSRF
+        "java_ssrf": {
+            "patterns": {
+                "java": [
+                    (r'restTemplate\.(getForObject|postForObject|exchange)\s*\([^,)]+\+', "RestTemplate URL 拼接"),
+                    (r'WebClient[^;]*\.uri\s*\(\s*[^)]+\+', "WebClient URI 拼接"),
+                    (r'@FeignClient\s*\([^)]*url\s*=\s*["\']?\s*\$\{[^}]*\}', "Feign url 使用可配置变量"),
+                    (r'new\s+URL\s*\(\s*[^)]+\+', "new URL 拼接用户输入"),
+                    (r'HttpClient\.send\s*\(', "HttpClient send (检查 URL 来源)"),
+                ],
+            },
+            "severity": "high",
+            "description": "Java SSRF：RestTemplate/WebClient/Feign URL 拼接用户输入，可请求内网",
+            "cwe_id": "CWE-918",
+        },
+
+        # Redis 反序列化 / Lua
+        "redis_misconfig": {
+            "patterns": {
+                "java": [
+                    (r'JdkSerializationRedisSerializer', "Jdk 序列化 Redis（反序列化风险）"),
+                    (r'redisTemplate\.setValueSerializer\s*\(\s*new\s+JdkSerial', "Redis JDK 序列化配置"),
+                    (r'\.keys\s*\(\s*["\']?\*["\']?\s*\)', "Redis KEYS * (DoS 风险)"),
+                    (r'redisTemplate\.execute\s*\(\s*new\s+DefaultRedisScript', "Redis Lua 脚本执行"),
+                ],
+            },
+            "severity": "medium",
+            "description": "Redis 使用缺陷：JDK 序列化反序列化 RCE、KEYS * DoS、Lua 沙箱风险",
+            "cwe_id": "CWE-502",
+        },
+
+        # JDBC / MySQL 参数缺陷
+        "jdbc_misconfig": {
+            "patterns": {
+                "java": [
+                    (r'allowLoadLocalInfile\s*=\s*true', "MySQL allowLoadLocalInfile 开启（任意文件读取）"),
+                    (r'autoDeserialize\s*=\s*true', "MySQL autoDeserialize（反序列化 RCE）"),
+                    (r'useServerPrepStmts\s*=\s*false', "关闭服务端 PrepStmts（弱化预编译）"),
+                    (r'allowUrlInLocalInfile\s*=\s*true', "MySQL URL LOAD DATA LOCAL"),
+                ],
+                "properties": [
+                    (r'jdbc:mysql://[^?]*\?[^\s]*allowLoadLocalInfile=true', "JDBC URL allowLoadLocalInfile"),
+                    (r'jdbc:mysql://[^?]*\?[^\s]*autoDeserialize=true', "JDBC URL autoDeserialize"),
+                ],
+                "yaml": [
+                    (r'url:\s*["\']?jdbc:mysql://[^?"\']*\?[^"\']*allowLoadLocalInfile=true', "YAML JDBC allowLoadLocalInfile"),
+                ],
+            },
+            "severity": "high",
+            "description": "JDBC/MySQL 危险参数：allowLoadLocalInfile 可任意文件读取，autoDeserialize 可 RCE",
+            "cwe_id": "CWE-611",
+        },
+
+        # Dubbo Hessian2
+        "dubbo_hessian_deserialization": {
+            "patterns": {
+                "java": [
+                    (r'@Service\s*\([^)]*protocol\s*=\s*["\']dubbo', "Dubbo protocol 服务暴露"),
+                    (r'ApplicationConfig[^;]*\.setQosEnable\s*\(\s*true', "Dubbo QoS 端口开启（22222）"),
+                    (r'com\.alibaba\.com\.caucho\.hessian', "Hessian2 反序列化点"),
+                    (r'HessianInput|Hessian2Input', "Hessian 输入流"),
+                ],
+                "properties": [
+                    (r'dubbo\.protocol\.name\s*=\s*dubbo', "Dubbo 协议使用 Hessian2"),
+                    (r'dubbo\.application\.qos-enable\s*=\s*true', "Dubbo QoS 开启"),
+                ],
+            },
+            "severity": "critical",
+            "description": "Dubbo Hessian2 反序列化 RCE（CVE-2021-25641/CVE-2023-23638）+ QoS 未授权",
+            "cwe_id": "CWE-502",
+        },
+
+        # Vue3 动态组件 / compile
+        "vue3_dynamic_component": {
+            "patterns": {
+                "javascript": [
+                    (r'<component\s+[^>]*:is\s*=\s*["\'][^"\']*\$\{', "Vue :is 绑定用户输入"),
+                    (r'Vue\.compile\s*\(', "Vue.compile 运行时编译"),
+                    (r'compile\s*\(\s*[^)]*\+', "compile 拼接输入"),
+                    (r'h\s*\(\s*[^,]+,\s*\{[^}]*innerHTML', "h() 渲染 innerHTML"),
+                ],
+                "vue": [
+                    (r':is\s*=\s*["\'][^"\']*\$\{', "template :is 动态组件"),
+                    (r'v-bind:is\s*=\s*["\'][^"\']*\+', "v-bind:is 拼接"),
+                ],
+            },
+            "severity": "high",
+            "description": "Vue3 动态组件 / 运行时编译注入：:is 或 compile() 接受用户输入",
+            "cwe_id": "CWE-94",
+        },
+
+        # uniapp 专项
+        "uniapp_misconfig": {
+            "patterns": {
+                "javascript": [
+                    (r'uni\.request\s*\(\s*\{[^}]*url\s*:\s*[^,}]*\+', "uni.request url 拼接"),
+                    (r'uni\.evaluateJavaScript\s*\(', "uni.evaluateJavaScript 动态 JS"),
+                    (r'plus\.runtime\.(launchApplication|openURL)\s*\(', "plus.runtime 敏感 API"),
+                    (r'plus\.io\.resolveLocalFileSystemURL\s*\(', "plus 文件系统 API"),
+                    (r'uni\.setStorage(Sync)?\s*\(\s*\{[^}]*key\s*:\s*["\'](?:token|password|secret)', "敏感数据存 storage"),
+                    (r'//\s*#ifdef\s+H5\s*\n[^/]*(?:token|key|secret)', "条件编译 H5 泄漏"),
+                    (r'//\s*#ifdef\s+APP-PLUS\s*\n[^/]*(?:token|key|secret)', "条件编译 APP 泄漏"),
+                ],
+                "vue": [
+                    (r'<web-view\s+[^>]*src\s*=\s*["\'][^"\']*\$\{', "web-view src 拼接（XSS/URL 注入）"),
+                ],
+            },
+            "severity": "high",
+            "description": "uniapp 专项：uni.request SSRF、evaluateJavaScript 注入、plus.runtime 越权、条件编译泄密",
+            "cwe_id": "CWE-95",
+        },
     }
     
     @property
