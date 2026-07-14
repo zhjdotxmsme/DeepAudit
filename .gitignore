@@ -193,3 +193,6 @@ backend/data/vector_db/
 
 .omo
 .cortexkit
+# Local artifacts
+DeepAudit.zip
+.opencode/
