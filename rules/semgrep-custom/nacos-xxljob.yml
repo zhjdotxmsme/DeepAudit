@@ -1,0 +1,170 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Nacos - Default Credentials in Config
+  # ---------------------------------------------------------------------------
+  - id: nacos-default-credentials
+    message: >-
+      检测到 Nacos 使用默认账户 nacos/nacos。生产环境必须修改默认账户/密码，
+      否则任何人可通过 /nacos 控制台读取所有配置、注册恶意服务。
+      Nacos 2.2+ 已强制要求修改，但旧版本或自定义部署仍可能存在。
+    severity: ERROR
+    languages: [generic]
+    metadata:
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      category: security
+      technology: [nacos, spring-cloud]
+      references:
+        - https://nacos.io/zh-cn/docs/auth.html
+    paths:
+      include:
+        - "*.properties"
+        - "*.yml"
+        - "*.yaml"
+    pattern-either:
+      - pattern-regex: 'nacos\.core\.auth\.enabled\s*[:=]\s*false'
+      - pattern-regex: 'spring\.cloud\.nacos\.(config|discovery)\.username\s*[:=]\s*nacos\s*$'
+      - pattern-regex: 'spring\.cloud\.nacos\.(config|discovery)\.password\s*[:=]\s*nacos\s*$'
+
+  # ---------------------------------------------------------------------------
+  # Nacos - Auth Server Identity Bypass (CVE-2021-29441)
+  # ---------------------------------------------------------------------------
+  - id: nacos-auth-server-identity-bypass
+    message: >-
+      Nacos serverIdentity 使用默认值 serverIdentity/security 或未启用 auth 拦截。
+      CVE-2021-29441：攻击者携带 User-Agent: Nacos-Server 可绕过所有鉴权访问 /nacos/v1/**。
+      修复：配置 nacos.core.auth.server.identity.key/value 为强随机值，
+      并设置 nacos.core.auth.enable.userAgentAuthWhite=false。
+    severity: ERROR
+    languages: [generic]
+    metadata:
+      cwe: "CWE-287: Improper Authentication"
+      category: security
+      technology: [nacos]
+      references:
+        - https://nvd.nist.gov/vuln/detail/CVE-2021-29441
+    paths:
+      include:
+        - "*.properties"
+        - "*.yml"
+        - "*.yaml"
+    pattern-either:
+      - pattern-regex: 'nacos\.core\.auth\.enable\.userAgentAuthWhite\s*[:=]\s*true'
+      - pattern-regex: 'nacos\.core\.auth\.server\.identity\.key\s*[:=]\s*serverIdentity\s*$'
+      - pattern-regex: 'nacos\.core\.auth\.server\.identity\.value\s*[:=]\s*security\s*$'
+
+  # ---------------------------------------------------------------------------
+  # XXL-Job Executor - Empty accessToken
+  # ---------------------------------------------------------------------------
+  - id: xxljob-executor-empty-access-token
+    message: >-
+      XXL-Job Executor 未配置 accessToken 或使用默认值。默认端口 9999 暴露 /run 接口，
+      攻击者可无认证下发 GLUE(Groovy/Shell) 脚本执行任意命令（RCE）。
+      修复：设置 xxl.job.accessToken 为强随机值，与调度中心保持一致。
+    severity: ERROR
+    languages: [generic]
+    metadata:
+      cwe: "CWE-306: Missing Authentication for Critical Function"
+      category: security
+      technology: [xxl-job]
+      references:
+        - https://github.com/xuxueli/xxl-job/issues/2049
+    paths:
+      include:
+        - "*.properties"
+        - "*.yml"
+        - "*.yaml"
+    pattern-either:
+      - pattern-regex: 'xxl\.job\.accessToken\s*[:=]\s*$'
+      - pattern-regex: 'xxl\.job\.accessToken\s*[:=]\s*default_token\s*$'
+      - pattern-regex: 'xxl\.job\.accessToken\s*[:=]\s*xxl-job\s*$'
+
+  # ---------------------------------------------------------------------------
+  # Shiro - Hardcoded RememberMe Key (CVE-2016-4437)
+  # ---------------------------------------------------------------------------
+  - id: shiro-default-remember-me-key
+    message: >-
+      检测到 Shiro CookieRememberMeManager 使用默认硬编码 AES 密钥
+      kPH+bIxk5D2deZiIxcaaaA==（CVE-2016-4437）。攻击者可构造反序列化 payload
+      绕过登录并 RCE。请使用 setCipherKey(随机 16 字节 key) 且不可硬编码于源码。
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-798"
+      category: security
+      technology: [shiro]
+      references:
+        - https://nvd.nist.gov/vuln/detail/CVE-2016-4437
+    pattern-either:
+      - pattern: |
+          $M.setCipherKey(Base64.decode("kPH+bIxk5D2deZiIxcaaaA=="))
+      - pattern-regex: 'kPH\+bIxk5D2deZiIxcaaaA=='
+
+  # ---------------------------------------------------------------------------
+  # Fastjson autoType Enabled
+  # ---------------------------------------------------------------------------
+  - id: fastjson-autotype-enabled
+    message: >-
+      Fastjson 显式开启 autoType（ParserConfig.getGlobalInstance().setAutoTypeSupport(true)）。
+      autoType 允许反序列化任意 @type 类，历史上多次爆出 RCE（CVE-2017-18349、CVE-2022-25845 等）。
+      请迁移到 Fastjson2 并使用 safeMode，或使用 Jackson。
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      category: security
+      technology: [fastjson]
+    pattern-either:
+      - pattern: ParserConfig.getGlobalInstance().setAutoTypeSupport(true)
+      - pattern: |
+          $CFG.setAutoTypeSupport(true)
+      - pattern: JSON.parseObject($X, Object.class)
+
+  # ---------------------------------------------------------------------------
+  # Jackson - enableDefaultTyping (any variant)
+  # ---------------------------------------------------------------------------
+  - id: jackson-enable-default-typing
+    message: >-
+      Jackson ObjectMapper.enableDefaultTyping() / activateDefaultTyping() 使用默认 typing 白名单。
+      配合 gadget 库（如 c3p0、logback、spring-aop）可导致反序列化 RCE。
+      如需多态反序列化，请使用 activateDefaultTyping(PolymorphicTypeValidator) 并显式白名单基类。
+    severity: WARNING
+    languages: [java]
+    metadata:
+      cwe: "CWE-502"
+      category: security
+      technology: [jackson]
+    pattern-either:
+      - pattern: $OM.enableDefaultTyping(...)
+      - pattern: $OM.enableDefaultTypingAsProperty(...)
+      - pattern: |
+          $OM.activateDefaultTyping($LP)
+      - pattern: |
+          $OM.activateDefaultTyping($LP, $A)
+
+  # ---------------------------------------------------------------------------
+  # Log4j - Log4Shell (CVE-2021-44228) direct user-input logging
+  # ---------------------------------------------------------------------------
+  - id: log4j-log-user-input-jndi
+    message: >-
+      检测到 Log4j2 直接打印用户可控字符串。若使用 Log4j 2.0-2.14.1 且未禁用
+      formatMsgNoLookups，${jndi:ldap://...} 将触发 JNDI 注入 RCE（CVE-2021-44228）。
+      请升级到 Log4j 2.17.1+，或临时设置 -Dlog4j2.formatMsgNoLookups=true。
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-917: Expression Language Injection"
+      category: security
+      technology: [log4j]
+      references:
+        - https://logging.apache.org/log4j/2.x/security.html
+    pattern-either:
+      - pattern: |
+          logger.info($REQ.getHeader(...))
+      - pattern: |
+          logger.warn($REQ.getHeader(...))
+      - pattern: |
+          logger.error($REQ.getHeader(...))
+      - pattern: |
+          log.info($REQ.getParameter(...))
+      - pattern: |
+          log.warn($REQ.getParameter(...))

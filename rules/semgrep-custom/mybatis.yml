@@ -1,0 +1,100 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # MyBatis ${} SQL Injection - Java Annotations (@Select, @Update, @Delete, @Insert)
+  # ---------------------------------------------------------------------------
+  - id: mybatis-annotation-dollar-injection
+    message: >-
+      MyBatis 注解 SQL 中检测到 ${} 拼接。${} 不做参数化处理，直接字符串拼接到 SQL，
+      攻击者可注入任意 SQL。请使用 #{} 参数占位符（自动 PreparedStatement 参数化）。
+      仅在必须动态传入表名/列名/排序字段时才使用 ${}，且必须严格白名单校验。
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+      owasp: "A03:2021 Injection"
+      category: security
+      technology: [mybatis, java, spring-boot]
+      references:
+        - https://mybatis.org/mybatis-3/sqlmap-xml.html#String_Substitution
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @Select($SQL)
+          - pattern: |
+              @Update($SQL)
+          - pattern: |
+              @Delete($SQL)
+          - pattern: |
+              @Insert($SQL)
+      - metavariable-regex:
+          metavariable: $SQL
+          regex: '.*\$\{[^}]+\}.*'
+
+  # ---------------------------------------------------------------------------
+  # MyBatis Provider Class - Dynamic SQL Building with String Concatenation
+  # ---------------------------------------------------------------------------
+  - id: mybatis-provider-string-concat
+    message: >-
+      MyBatis @SelectProvider/@UpdateProvider 的 SQL 构建方法中检测到字符串拼接。
+      SQL Provider 中若直接拼接用户输入将导致 SQL 注入。请使用 SQL.WHERE()/SET() 等
+      条件构造 API，并通过 #{} 参数化传值。
+    severity: WARNING
+    languages: [java]
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+      category: security
+      technology: [mybatis, java]
+    patterns:
+      - pattern-inside: |
+          class $CLS {
+            ...
+          }
+      - pattern-either:
+          - pattern: |
+              public String $M(..., String $P, ...) {
+                ...
+                return "..." + $P + "...";
+              }
+          - pattern: |
+              public String $M(..., String $P, ...) {
+                ...
+                String $Q = "..." + $P + "...";
+                ...
+              }
+
+  # ---------------------------------------------------------------------------
+  # MyBatis OrderBy Injection - Common insecure pattern
+  # ---------------------------------------------------------------------------
+  - id: mybatis-orderby-user-input
+    message: >-
+      检测到 ORDER BY 字段来自方法参数直接拼接（${orderBy}/${sort}）。ORDER BY 无法参数化，
+      攻击者可注入子查询/时间盲注 payload。请使用白名单枚举，禁止直接透传用户输入。
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-89"
+      category: security
+      technology: [mybatis]
+    pattern-regex: |
+      ORDER\s+BY\s+\$\{(orderBy|sort|sortField|orderField|column|orderColumn)\}
+
+  # ---------------------------------------------------------------------------
+  # XML Mapper ${} Injection (raw)
+  # ---------------------------------------------------------------------------
+  - id: mybatis-xml-mapper-dollar-injection
+    message: >-
+      XML Mapper 中检测到 ${} 拼接（LIKE '%${keyword}%' 之类）。请改为 #{keyword}
+      并使用 CONCAT('%', #{keyword}, '%') 拼接通配符，避免 SQL 注入。
+    severity: ERROR
+    languages: [xml, generic]
+    metadata:
+      cwe: "CWE-89"
+      category: security
+      technology: [mybatis]
+    paths:
+      include:
+        - "*.xml"
+        - "**/mapper/*.xml"
+        - "**/mappers/*.xml"
+    pattern-regex: |
+      \$\{(keyword|name|value|param|input|search|query|filter|where|orderBy|sort|column|table)\}

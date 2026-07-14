@@ -136,6 +136,21 @@ class SemgrepTool(AgentTool):
         "p/nodejs",
         "p/cwe-top-25",
         "p/ci",
+        # 🔥 Java 生态扩展规则集
+        "r/java.spring",
+        "r/java.mybatis",
+        "r/java.jaxrs",
+        "r/java.servlets",
+        "r/java.lang.security",
+        # 🔥 前端/Node 扩展规则集
+        "r/javascript.audit",
+        "r/javascript.express.security",
+        "r/typescript.react.security",
+        # 🔥 项目本地自定义规则（YAML 文件路径，相对项目根）
+        "rules/semgrep-custom/mybatis.yml",
+        "rules/semgrep-custom/nacos-xxljob.yml",
+        "rules/semgrep-custom/uniapp.yml",
+        "rules/semgrep-custom/",  # 目录内所有 YAML 一次加载
     ]
     
     def __init__(self, project_root: str, sandbox_manager: Optional["SandboxManager"] = None):
@@ -183,10 +198,13 @@ Semgrep 是业界领先的静态分析工具，支持 30+ 种编程语言。
 - 框架特定漏洞检测（SpringBoot/Vue等）
 
 💡 最佳实践:
-- Java/SpringBoot 项目: 使用 "p/security-audit,p/java,p/spring,p/owasp-top-ten"
-- Vue/前端项目: 使用 "p/security-audit,p/javascript,p/typescript,p/vue,p/xss"
+- Java/SpringBoot 项目: 使用 "p/security-audit,p/java,p/spring,r/java.spring,r/java.mybatis,rules/semgrep-custom/"
+- Vue/前端项目: 使用 "p/security-audit,p/javascript,p/typescript,p/vue,p/xss,r/javascript.audit"
+- uniapp/小程序项目: 使用 "p/security-audit,p/javascript,rules/semgrep-custom/uniapp.yml"
 - Python 项目: 使用 "p/security-audit,p/python,p/owasp-top-ten"
-- 也可以组合多个规则集，用逗号分隔"""
+- 中间件加固审计（Nacos/XXL-Job/Shiro/Fastjson）: 追加 "rules/semgrep-custom/nacos-xxljob.yml"
+- 也可以组合多个规则集，用逗号分隔
+- 支持传入本地 YAML 文件路径或目录，rules/semgrep-custom/ 内含 mybatis/nacos-xxljob/uniapp 定制规则"""
     
     @property
     def args_schema(self):

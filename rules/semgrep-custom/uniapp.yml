@@ -1,0 +1,128 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # uniapp - uni.request URL Concatenation (SSRF/Open Redirect via user input)
+  # ---------------------------------------------------------------------------
+  - id: uniapp-request-url-concat
+    message: >-
+      uni.request 的 url 字段拼接用户可控变量。攻击者可构造恶意 URL 让小程序客户端发起
+      任意 HTTP 请求（云函数场景下等价 SSRF），或者跳转到钓鱼后端。
+      修复：使用固定域名白名单 + 只把用户输入放入 data/params，不进入 url。
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-918: Server-Side Request Forgery"
+      category: security
+      technology: [uniapp, miniprogram]
+    pattern-either:
+      - pattern: |
+          uni.request({
+            url: $BASE + $USER_INPUT,
+            ...
+          })
+      - pattern: |
+          uni.request({
+            url: `${$BASE}${$USER_INPUT}`,
+            ...
+          })
+
+  # ---------------------------------------------------------------------------
+  # uniapp - uni.navigateTo / redirectTo Open Redirect
+  # ---------------------------------------------------------------------------
+  - id: uniapp-navigate-to-user-controlled
+    message: >-
+      uni.navigateTo / uni.redirectTo 的 url 参数直接来自用户输入或 URL query。
+      攻击者可诱导跳转到攻击者控制的页面（钓鱼、越权页面访问）。
+      修复：url 使用白名单枚举，或校验以 '/pages/' 开头。
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-601: URL Redirection to Untrusted Site"
+      category: security
+      technology: [uniapp]
+    pattern-either:
+      - pattern: |
+          uni.navigateTo({ url: $USER, ... })
+      - pattern: |
+          uni.redirectTo({ url: $USER, ... })
+      - pattern: |
+          uni.reLaunch({ url: $USER, ... })
+
+  # ---------------------------------------------------------------------------
+  # uniapp - Dangerous evaluateJavaScript in web-view
+  # ---------------------------------------------------------------------------
+  - id: uniapp-webview-evaluate-javascript
+    message: >-
+      检测到 web-view.evaluateJavaScript 执行动态字符串。若字符串包含用户可控内容，
+      将在 web-view 上下文中执行任意 JS，可窃取会话/操纵页面。
+      修复：evaluateJavaScript 只允许硬编码脚本，禁止拼接用户输入。
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+      category: security
+      technology: [uniapp, webview]
+    pattern-either:
+      - pattern: |
+          $WV.evaluateJavaScript($X + $Y)
+      - pattern: |
+          $WV.evaluateJavaScript(`${$X}`)
+
+  # ---------------------------------------------------------------------------
+  # uniapp - Hardcoded appId/appSecret leaked in source
+  # ---------------------------------------------------------------------------
+  - id: uniapp-hardcoded-app-secret
+    message: >-
+      检测到硬编码 appSecret / API 密钥。uniapp 打包后源码可通过反编译还原，
+      泄露的 secret 可被冒名调用后端接口。请后端签名，不要将 secret 打包进前端。
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-798"
+      category: security
+      technology: [uniapp, miniprogram]
+    pattern-either:
+      - pattern-regex: 'appSecret\s*[:=]\s*[''"][A-Za-z0-9]{16,}[''"]'
+      - pattern-regex: 'secretKey\s*[:=]\s*[''"][A-Za-z0-9]{16,}[''"]'
+      - pattern-regex: 'access_key_secret\s*[:=]\s*[''"][A-Za-z0-9]{16,}[''"]'
+
+  # ---------------------------------------------------------------------------
+  # uniapp - uni.setStorageSync Sensitive Data Without Encryption
+  # ---------------------------------------------------------------------------
+  - id: uniapp-plaintext-token-storage
+    message: >-
+      uni.setStorageSync 明文存储 token / password / idCard。小程序/H5 端存储可被越权访问
+      （越狱设备、开发者工具、H5 XSS）。建议使用后端会话或客户端加密后存储。
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-312: Cleartext Storage of Sensitive Information"
+      category: security
+      technology: [uniapp]
+    pattern-either:
+      - pattern: 'uni.setStorageSync("token", $X)'
+      - pattern: 'uni.setStorageSync("password", $X)'
+      - pattern: 'uni.setStorageSync("idCard", $X)'
+      - pattern: |
+          uni.setStorage({ key: "token", data: $X, ... })
+
+  # ---------------------------------------------------------------------------
+  # Vue3 - Dynamic <component :is="userInput"> (Component Injection)
+  # ---------------------------------------------------------------------------
+  - id: vue3-dynamic-component-user-input
+    message: >-
+      Vue3 <component :is="X"> 的 X 若来自用户输入，攻击者可加载任意已注册组件，
+      配合 slot / props 注入可能触发 XSS 或功能滥用。
+      修复：is 值使用白名单枚举校验，或通过映射表二级查找。
+    severity: WARNING
+    languages: [javascript, typescript, generic]
+    metadata:
+      cwe: "CWE-79"
+      category: security
+      technology: [vue3]
+    paths:
+      include:
+        - "*.vue"
+        - "*.tsx"
+        - "*.jsx"
+    pattern-regex: |
+      <component\s+:is\s*=\s*["'](?:route\.|\$route|params\.|query\.|props\.|userInput)
