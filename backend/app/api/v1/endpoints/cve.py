@@ -24,6 +24,7 @@ from app.db.session import get_db, AsyncSessionLocal
 from app.models.cve_knowledge import CVEKnowledge, CVESyncLog
 from app.models.user import User
 from app.services.cve_sync_service import CVESyncService
+from app.services import tech_stack_presets
 
 router = APIRouter()
 
@@ -128,6 +129,28 @@ class OSVPackage(BaseModel):
 
 class OSVSyncRequest(BaseModel):
     packages: List[OSVPackage]
+
+
+class PresetSelection(BaseModel):
+    """单个预设选择(生态 + 框架)"""
+    ecosystem: str = Field(..., description="Maven/npm/PyPI/Go/NuGet/RubyGems/crates.io/Packagist")
+    framework: str = Field(..., description="框架 ID,如 spring-core / django / express")
+
+
+class PresetSyncRequest(BaseModel):
+    """预设同步请求: 多选生态+框架,后端展开为 OSV 包列表"""
+    selections: List[PresetSelection] = Field(
+        default_factory=list,
+        description="选择的预设项列表"
+    )
+    sync_all: bool = Field(
+        default=False,
+        description="True = 同步所有预设(忽略 selections)"
+    )
+    ecosystem: Optional[str] = Field(
+        default=None,
+        description="sync_all=True 时限定单一生态,如 'Maven'"
+    )
 
 
 class SyncTriggerResponse(BaseModel):
@@ -319,6 +342,40 @@ async def _run_tech_stack_sync(
             await svc.close()
 
 
+async def _run_osv_incremental_sync(ecosystems: Optional[List[str]]) -> None:
+    async with AsyncSessionLocal() as session:
+        svc = CVESyncService(db=session)
+        try:
+            await svc.sync_osv_incremental(ecosystems=ecosystems)
+        finally:
+            await svc.close()
+
+
+async def _run_cvelist_v5_sync(force_full: bool) -> None:
+    async with AsyncSessionLocal() as session:
+        svc = CVESyncService(db=session)
+        try:
+            await svc.sync_cvelist_v5(force_full=force_full)
+        finally:
+            await svc.close()
+
+
+async def _run_osv_preset_sync(
+    packages: List[dict],
+    source_label: str,
+) -> None:
+    """通用 OSV 预设同步 - 与 _run_osv_sync 共享 sync_osv_for_packages,但允许自定义 source 标签"""
+    async with AsyncSessionLocal() as session:
+        svc = CVESyncService(db=session)
+        try:
+            log = await svc.sync_osv_for_packages(packages=packages)
+            if log is not None and source_label:
+                log.source = source_label
+                await session.commit()
+        finally:
+            await svc.close()
+
+
 @router.post("/sync/nvd", response_model=SyncTriggerResponse)
 async def trigger_nvd_sync(
     payload: NVDSyncRequest,
@@ -350,6 +407,29 @@ async def trigger_osv_sync(
     background_tasks.add_task(_run_osv_sync, packages)
     return SyncTriggerResponse(
         message=f"OSV sync scheduled for {len(packages)} package(s)"
+    )
+
+
+@router.post("/sync/osv/incremental", response_model=SyncTriggerResponse)
+async def trigger_osv_incremental_sync(
+    ecosystems: str = Query("", description="逗号分隔的生态系统列表，如 Maven,npm,PyPI 为空则使用全部"),
+    background_tasks: BackgroundTasks = None,
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """
+    异步触发 OSV 增量同步（基于 modified_id.csv）
+
+    从上一次成功同步的 end_date 开始，获取指定生态系统自该时间以来修改的所有漏洞。
+    支持的生态系统：Maven, npm, PyPI, Go, NuGet, crates.io, RubyGems, Packagist
+    """
+    ecosystem_list: Optional[List[str]] = None
+    if ecosystems.strip():
+        ecosystem_list = [e.strip() for e in ecosystems.split(",") if e.strip()]
+
+    background_tasks.add_task(_run_osv_incremental_sync, ecosystem_list)
+    eco_str = ecosystems or "全部生态系统"
+    return SyncTriggerResponse(
+        message=f"OSV incremental sync scheduled for {eco_str}"
     )
 
 
@@ -404,5 +484,113 @@ async def trigger_tech_stack_sync(
             f"Tech-stack sync scheduled "
             f"(keywords={kw_count}, years={payload.years}, "
             f"severity={payload.severity_filter or 'ALL'})"
+        )
+    )
+
+
+@router.post("/sync/cvelist-v5", response_model=SyncTriggerResponse)
+async def trigger_cvelist_v5_sync(
+    force_full: bool = Query(False, description="强制全量同步，忽略增量"),
+    background_tasks: BackgroundTasks = None,
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """
+    异步触发 CVEProject cvelistV5 Git 镜像同步
+
+    首次全量同步，之后增量同步（只处理自上次同步以来变更的 CVE 文件）。
+    """
+    background_tasks.add_task(_run_cvelist_v5_sync, force_full)
+    mode = "full" if force_full else "incremental"
+    return SyncTriggerResponse(
+        message=f"cvelistV5 {mode} sync scheduled"
+    )
+
+
+# ==================== 预设同步 (Tech Stack Presets) ====================
+# 提供按生态/语言/框架的多选,避免手写 ecosystem:name 文本
+
+@router.get("/sync/osv/presets")
+async def get_osv_presets(
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """
+    返回 OSV 同步预设列表(按生态分组),供前端多选 UI 使用
+
+    格式:
+    [
+      {
+        "ecosystem": "Maven",
+        "label": "Java / JVM",
+        "frameworks": [
+          {"id": "spring-core", "label": "Spring Framework (核心)", "count": 6},
+          ...
+        ]
+      },
+      ...
+    ]
+
+    额外字段: `stats` 包含总生态/框架/包数
+    """
+    return {
+        "presets": tech_stack_presets.list_presets(),
+        "stats": tech_stack_presets.get_stats(),
+    }
+
+
+@router.post("/sync/osv/presets", response_model=SyncTriggerResponse)
+async def trigger_osv_preset_sync(
+    payload: PresetSyncRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """
+    异步触发 OSV 预设同步
+
+    工作流:
+    1. 前端提交 selections=[{ecosystem, framework}, ...] 或 sync_all=True
+    2. 后端展开为 OSV 包列表(去重)
+    3. 调用 sync_osv_for_packages 入库
+
+    限制: 最多 500 个包,超过报错
+    """
+    if payload.sync_all:
+        packages = tech_stack_presets.expand_all(ecosystem=payload.ecosystem)
+    else:
+        selections = [s.model_dump() for s in payload.selections]
+        packages = tech_stack_presets.expand_selection(selections)
+
+    if not packages:
+        raise HTTPException(
+            status_code=400,
+            detail="选择无效:没有匹配的预设包",
+        )
+
+    # 去重
+    seen = set()
+    unique = []
+    for p in packages:
+        key = (p["ecosystem"], p["name"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(p)
+    packages = unique
+
+    if len(packages) > 500:
+        raise HTTPException(
+            status_code=400,
+            detail=f"包数量过多 ({len(packages)} > 500),请缩小选择范围或使用 sync_osv_incremental 全量增量",
+        )
+
+    source_label = "osv_preset"
+    if payload.sync_all:
+        source_label = f"osv_preset_all:{payload.ecosystem or 'all'}"
+
+    background_tasks.add_task(_run_osv_preset_sync, packages, source_label)
+
+    return SyncTriggerResponse(
+        message=(
+            f"OSV preset sync scheduled for {len(packages)} package(s) "
+            f"from {len(set(p['ecosystem'] for p in packages))} ecosystem(s)"
         )
     )

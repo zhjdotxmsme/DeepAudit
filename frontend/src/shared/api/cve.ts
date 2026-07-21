@@ -72,6 +72,38 @@ export interface OSVSyncRequest {
   packages: OSVPackage[];
 }
 
+export interface PresetSelection {
+  ecosystem: string;
+  framework: string;
+}
+
+export interface PresetSyncRequest {
+  selections: PresetSelection[];
+  sync_all?: boolean;
+  ecosystem?: string;
+}
+
+export interface PresetFramework {
+  id: string;
+  label: string;
+  count: number;
+}
+
+export interface PresetEcosystem {
+  ecosystem: string;
+  label: string;
+  frameworks: PresetFramework[];
+}
+
+export interface OSVPresetsResponse {
+  presets: PresetEcosystem[];
+  stats: {
+    ecosystems: number;
+    frameworks: number;
+    packages: number;
+  };
+}
+
 export interface SyncTriggerResponse {
   accepted: boolean;
   message: string;
@@ -128,5 +160,90 @@ export async function triggerOSVSync(
   payload: OSVSyncRequest,
 ): Promise<SyncTriggerResponse> {
   const response = await apiClient.post('/cve/sync/osv', payload);
+  return response.data;
+}
+
+/**
+ * OSV 增量同步（基于 modified_id.csv）
+ * @param ecosystems 逗号分隔的生态系统列表，空字符串 = 全部
+ */
+export async function triggerOSVIncrementalSync(
+  ecosystems: string = '',
+): Promise<SyncTriggerResponse> {
+  const query = ecosystems ? `?ecosystems=${encodeURIComponent(ecosystems)}` : '';
+  const response = await apiClient.post(`/cve/sync/osv/incremental${query}`);
+  return response.data;
+}
+
+export interface NVDIncrementalSyncRequest {
+  max_results?: number;
+  severity_filter?: string;
+  fallback_days?: number;
+}
+
+/**
+ * NVD 增量同步：从上次成功同步的 end_date 开始拉取
+ */
+export async function triggerNVDIncrementalSync(
+  payload: NVDIncrementalSyncRequest,
+): Promise<SyncTriggerResponse> {
+  const response = await apiClient.post('/cve/sync/nvd/incremental', payload);
+  return response.data;
+}
+
+export interface TechStackSyncRequest {
+  keywords?: string[];
+  years?: number;
+  severity_filter?: string;
+  max_per_keyword?: number;
+}
+
+/**
+ * 技术栈历史 CVE 同步（按关键词批量从 NVD 拉取）
+ */
+export async function triggerTechStackSync(
+  payload: TechStackSyncRequest,
+): Promise<SyncTriggerResponse> {
+  const response = await apiClient.post('/cve/sync/tech-stack', payload);
+  return response.data;
+}
+
+/**
+ * CVEProject cvelistV5 Git 兜底同步
+ *
+ * 直接从 GitHub 官方仓库 clone/fetch CVE JSON，绕过 NVD/OSV API。
+ * 适用场景：
+ *   - NVD API 无 key 限速严重（1 req/6s）
+ *   - NVD/OSV 网络受限或超时
+ *   - 需要全量历史数据（NVD 单次窗口最多 120 天）
+ *
+ * @param forceFull true = 忽略增量哈希，重新扫描整个仓库
+ */
+export async function triggerCvelistV5Sync(
+  forceFull: boolean = false,
+): Promise<SyncTriggerResponse> {
+  const response = await apiClient.post(
+    `/cve/sync/cvelist-v5?force_full=${forceFull}`,
+  );
+  return response.data;
+}
+
+/**
+ * 获取 OSV 同步预设（按生态/语言/框架分组）
+ * 给前端多选 UI 用，避免手写 ecosystem:name
+ */
+export async function getOSVPresets(): Promise<OSVPresetsResponse> {
+  const response = await apiClient.get('/cve/sync/osv/presets');
+  return response.data;
+}
+
+/**
+ * 触发 OSV 预设同步
+ * @param payload selections=[{ecosystem, framework}, ...] 或 sync_all=true
+ */
+export async function triggerOSVPresetSync(
+  payload: PresetSyncRequest,
+): Promise<SyncTriggerResponse> {
+  const response = await apiClient.post('/cve/sync/osv/presets', payload);
   return response.data;
 }

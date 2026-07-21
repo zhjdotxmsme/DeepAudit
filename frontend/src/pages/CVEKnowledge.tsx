@@ -44,6 +44,7 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
+  GitBranch,
 } from 'lucide-react';
 import {
   listCVEs,
@@ -52,12 +53,20 @@ import {
   listSyncLogs,
   triggerNVDSync,
   triggerOSVSync,
+  triggerCvelistV5Sync,
+  getOSVPresets,
+  triggerOSVPresetSync,
   type CVEItem,
   type CVEDetail,
   type CVEStats,
   type SyncLogItem,
   type OSVPackage,
+  type OSVPresetsResponse,
+  type PresetEcosystem,
+  type PresetFramework,
 } from '@/shared/api/cve';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 const SEVERITY_COLOR: Record<string, string> = {
   CRITICAL: 'cyber-badge-critical',
@@ -128,6 +137,20 @@ export default function CVEKnowledge() {
     'npm:lodash\nPyPI:requests\nMaven:org.springframework:spring-core',
   );
   const [osvSubmitting, setOsvSubmitting] = useState(false);
+
+  // cvelistV5 Git 兜底同步 dialog
+  const [gitOpen, setGitOpen] = useState(false);
+  const [gitForceFull, setGitForceFull] = useState(false);
+  const [gitSubmitting, setGitSubmitting] = useState(false);
+
+  // OSV 预设同步 dialog (多选替代手写文本)
+  const [presetOpen, setPresetOpen] = useState(false);
+  const [presetsData, setPresetsData] = useState<OSVPresetsResponse | null>(null);
+  const [presetsLoading, setPresetsLoading] = useState(false);
+  const [presetSelected, setPresetSelected] = useState<Set<string>>(
+    () => new Set(),
+  ); // key: `${ecosystem}::${framework}`
+  const [presetSubmitting, setPresetSubmitting] = useState(false);
 
   const loadList = useCallback(
     async (nextSkip: number = skip) => {
@@ -280,6 +303,101 @@ export default function CVEKnowledge() {
     }
   };
 
+  const submitGitSync = async () => {
+    try {
+      setGitSubmitting(true);
+      const res = await triggerCvelistV5Sync(gitForceFull);
+      toast.success(res.message || 'cvelistV5 Git 同步任务已提交');
+      setGitOpen(false);
+      setTimeout(loadLogs, 1500);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || 'cvelistV5 Git 同步触发失败');
+    } finally {
+      setGitSubmitting(false);
+    }
+  };
+
+  // OSV 预设同步 - 打开对话框时拉取预设
+  const openPresetDialog = async () => {
+    setPresetOpen(true);
+    setPresetSelected(new Set());
+    if (presetsData) return;
+    try {
+      setPresetsLoading(true);
+      const data = await getOSVPresets();
+      setPresetsData(data);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || '加载预设失败');
+      setPresetOpen(false);
+    } finally {
+      setPresetsLoading(false);
+    }
+  };
+
+  const togglePreset = (ecosystem: string, framework: string) => {
+    const key = `${ecosystem}::${framework}`;
+    setPresetSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const toggleEcoAll = (eco: PresetEcosystem, selectAll: boolean) => {
+    setPresetSelected((prev) => {
+      const next = new Set(prev);
+      eco.frameworks.forEach((fw) => {
+        const key = `${eco.ecosystem}::${fw.id}`;
+        if (selectAll) {
+          next.add(key);
+        } else {
+          next.delete(key);
+        }
+      });
+      return next;
+    });
+  };
+
+  const submitPresetSync = async (mode: 'selected' | 'all' = 'selected') => {
+    try {
+      setPresetSubmitting(true);
+      const payload =
+        mode === 'all'
+          ? { sync_all: true }
+          : {
+              selections: Array.from(presetSelected).map((key) => {
+                const [ecosystem, framework] = key.split('::');
+                return { ecosystem, framework };
+              }),
+            };
+      const res = await triggerOSVPresetSync(payload);
+      toast.success(res.message || 'OSV 预设同步已提交');
+      setPresetOpen(false);
+      setTimeout(loadLogs, 1500);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || 'OSV 预设同步触发失败');
+    } finally {
+      setPresetSubmitting(false);
+    }
+  };
+
+  // 统计已选包数
+  const selectedPackageCount = useMemo(() => {
+    if (!presetsData) return 0;
+    let count = 0;
+    presetSelected.forEach((key) => {
+      const [ecosystem, framework] = key.split('::');
+      const eco = presetsData.presets.find((e) => e.ecosystem === ecosystem);
+      const fw = eco?.frameworks.find((f) => f.id === framework);
+      if (fw) count += fw.count;
+    });
+    return count;
+  }, [presetSelected, presetsData]);
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const currentPage = Math.floor(skip / PAGE_SIZE) + 1;
 
@@ -365,9 +483,21 @@ export default function CVEKnowledge() {
               <Cloud className="w-4 h-4 mr-2" />
               同步 NVD
             </Button>
-            <Button onClick={() => setOsvOpen(true)} className="cyber-btn-secondary h-9">
+            <Button onClick={openPresetDialog} className="cyber-btn-primary h-9">
               <Package className="w-4 h-4 mr-2" />
-              同步 OSV
+              OSV 预设同步
+            </Button>
+            <Button onClick={() => setOsvOpen(true)} className="cyber-btn-secondary h-9" title="手写 ecosystem:name 列表">
+              <Terminal className="w-4 h-4 mr-2" />
+              高级
+            </Button>
+            <Button
+              onClick={() => setGitOpen(true)}
+              className="cyber-btn-secondary h-9"
+              title="从 CVEProject 官方 Git 仓库拉取 CVE JSON（NVD/OSV 网络受限时的兜底方案）"
+            >
+              <GitBranch className="w-4 h-4 mr-2" />
+              Git 兜底
             </Button>
             <Button
               onClick={() => {
@@ -895,6 +1025,245 @@ export default function CVEKnowledge() {
                 <>
                   <Package className="w-4 h-4 mr-2" />
                   开始同步
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* OSV 预设同步 Dialog (多选, 替代手写文本) */}
+      <Dialog open={presetOpen} onOpenChange={setPresetOpen}>
+        <DialogContent className="!w-[min(95vw,820px)] max-h-[85vh] cyber-dialog border border-border rounded-lg flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-mono">
+              <Package className="w-5 h-5 text-primary" />
+              OSV 预设同步 (多选)
+            </DialogTitle>
+          </DialogHeader>
+
+          {presetsLoading ? (
+            <div className="py-16 flex items-center justify-center">
+              <div className="loading-spinner" />
+            </div>
+          ) : !presetsData ? (
+            <div className="py-12 empty-state">
+              <p className="empty-state-title">无法加载预设</p>
+            </div>
+          ) : (
+            <>
+              <div className="cyber-card p-3 border-l-2 border-l-primary/60 flex-shrink-0">
+                <p className="text-xs text-foreground leading-relaxed">
+                  <span className="text-primary font-bold">勾选常用技术栈</span>
+                  ,后端自动展开为 OSV 包列表并触发同步,无需手写 ecosystem:name 文本。
+                </p>
+                <div className="flex items-center gap-4 text-[11px] text-muted-foreground mt-2">
+                  <span>生态: <span className="text-primary font-bold">{presetsData.stats.ecosystems}</span></span>
+                  <span>框架: <span className="text-primary font-bold">{presetsData.stats.frameworks}</span></span>
+                  <span>包: <span className="text-primary font-bold">{presetsData.stats.packages}</span></span>
+                  <span className="ml-auto">
+                    已选: <span className="text-emerald-400 font-bold">{presetSelected.size}</span> 框架
+                    ({selectedPackageCount} 包)
+                  </span>
+                </div>
+              </div>
+
+              <Tabs defaultValue={presetsData.presets[0]?.ecosystem} className="flex-1 min-h-0 flex flex-col">
+                <TabsList className="flex-shrink-0 flex flex-wrap h-auto">
+                  {presetsData.presets.map((eco) => (
+                    <TabsTrigger key={eco.ecosystem} value={eco.ecosystem} className="text-xs">
+                      {eco.label} <span className="ml-1 text-muted-foreground">({eco.frameworks.length})</span>
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+
+                {presetsData.presets.map((eco) => (
+                  <TabsContent
+                    key={eco.ecosystem}
+                    value={eco.ecosystem}
+                    className="flex-1 min-h-0 overflow-auto pr-2"
+                  >
+                    <div className="flex items-center justify-between mb-3 sticky top-0 bg-background/95 backdrop-blur py-2 z-10">
+                      <p className="text-xs text-muted-foreground">
+                        <code className="text-emerald-400">{eco.ecosystem}</code> · {eco.frameworks.length} 框架
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => toggleEcoAll(eco, true)}
+                          className="h-7 text-xs"
+                        >
+                          全选
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => toggleEcoAll(eco, false)}
+                          className="h-7 text-xs"
+                        >
+                          全不选
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {eco.frameworks.map((fw) => {
+                        const key = `${eco.ecosystem}::${fw.id}`;
+                        const checked = presetSelected.has(key);
+                        return (
+                          <label
+                            key={fw.id}
+                            className={`flex items-center gap-2 p-2 rounded border cursor-pointer transition-colors ${
+                              checked
+                                ? 'border-primary/60 bg-primary/10'
+                                : 'border-border hover:border-primary/30'
+                            }`}
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={() =>
+                                togglePreset(eco.ecosystem, fw.id)
+                              }
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold text-foreground truncate">
+                                {fw.label}
+                              </p>
+                              <p className="text-[10px] text-muted-foreground">
+                                {fw.id} · {fw.count} 包
+                              </p>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </TabsContent>
+                ))}
+              </Tabs>
+            </>
+          )}
+
+          <DialogFooter className="flex-shrink-0 border-t border-border pt-3 mt-2">
+            <div className="flex items-center text-[11px] text-muted-foreground mr-auto">
+              {selectedPackageCount > 0
+                ? `已选 ${presetSelected.size} 框架,展开为 ${selectedPackageCount} 个 OSV 包`
+                : '请勾选至少一个框架'}
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => setPresetOpen(false)}
+              className="cyber-btn-ghost"
+              disabled={presetSubmitting}
+            >
+              取消
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => submitPresetSync('all')}
+              className="cyber-btn-secondary"
+              disabled={presetSubmitting}
+              title="同步所有 8 个生态的全部预设 (约 100+ 包)"
+            >
+              <Zap className="w-4 h-4 mr-2" />
+              全量同步
+            </Button>
+            <Button
+              onClick={() => submitPresetSync('selected')}
+              className="cyber-btn-primary"
+              disabled={presetSubmitting || presetSelected.size === 0}
+            >
+              {presetSubmitting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  提交中
+                </>
+              ) : (
+                <>
+                  <Package className="w-4 h-4 mr-2" />
+                  同步已选 ({selectedPackageCount})
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* cvelistV5 Git 兜底同步 Dialog */}
+      <Dialog open={gitOpen} onOpenChange={setGitOpen}>
+        <DialogContent className="!w-[min(95vw,560px)] cyber-dialog border border-border rounded-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-mono">
+              <GitBranch className="w-5 h-5 text-primary" />
+              cvelistV5 Git 兜底同步
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="cyber-card p-3 border-l-2 border-l-amber-500/60">
+              <p className="text-xs text-foreground leading-relaxed">
+                <span className="text-amber-400 font-bold">兜底方案</span>
+                ：直接从{' '}
+                <code className="text-emerald-400">
+                  github.com/CVEProject/cvelistV5
+                </code>{' '}
+                Git 仓库拉取全量 CVE JSON，绕过 NVD/OSV API。
+              </p>
+              <ul className="text-[11px] text-muted-foreground list-disc list-inside mt-2 space-y-0.5">
+                <li>首次全量：clone 仓库（浅克隆，约几百 MB）</li>
+                <li>之后增量：<code>git fetch</code> + diff，只处理变更的 CVE 文件</li>
+                <li>后端需已安装 <code>git</code>，且能访问 GitHub（可配镜像）</li>
+                <li>镜像通过 <code>CVELIST_V5_GIT_REPO</code> 环境变量配置</li>
+              </ul>
+            </div>
+
+            <div className="space-y-2">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={gitForceFull}
+                  onChange={(e) => setGitForceFull(e.target.checked)}
+                  className="mt-0.5 accent-primary"
+                />
+                <div>
+                  <p className="text-xs font-bold text-foreground">
+                    强制全量同步 (force_full)
+                  </p>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    忽略上次同步的 commit hash，重新扫描整个仓库的所有 CVE JSON 文件。
+                    首次同步会自动全量，日常增量不需要勾选。
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              提示：任务在后台异步执行，全量首次同步可能耗时 10-30 分钟（取决于网络与 CPU），
+              请在"同步日志"查看进度。
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setGitOpen(false)}
+              className="cyber-btn-ghost"
+              disabled={gitSubmitting}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={submitGitSync}
+              className="cyber-btn-primary"
+              disabled={gitSubmitting}
+            >
+              {gitSubmitting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  提交中
+                </>
+              ) : (
+                <>
+                  <GitBranch className="w-4 h-4 mr-2" />
+                  {gitForceFull ? '开始全量同步' : '开始增量同步'}
                 </>
               )}
             </Button>
