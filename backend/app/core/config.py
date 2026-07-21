@@ -89,10 +89,12 @@ class Settings(BaseSettings):
     # ============ Agent 模块配置 ============
 
     # 嵌入模型配置（独立于 LLM 配置）
-    EMBEDDING_PROVIDER: str = "openai"  # openai, azure, ollama, cohere, huggingface, jina, qwen
-    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    # 默认使用本地 Ollama（nomic-embed-text），无需外部 API
+    # 如需远程服务可改为: openai / azure / cohere / huggingface / jina / qwen
+    EMBEDDING_PROVIDER: str = "ollama"  # openai, azure, ollama, cohere, huggingface, jina, qwen
+    EMBEDDING_MODEL: str = "nomic-embed-text"  # Ollama 嵌入模型（nomic-embed-text / bge-m3 / mxbai-embed-large）
     EMBEDDING_API_KEY: Optional[str] = None  # 嵌入模型专用 API Key（留空则使用 LLM_API_KEY）
-    EMBEDDING_BASE_URL: Optional[str] = None  # 嵌入模型专用 Base URL（留空使用提供商默认地址）
+    EMBEDDING_BASE_URL: Optional[str] = None  # 嵌入模型专用 Base URL（留空使用提供商默认地址，Ollama 默认 http://localhost:11434）
     
     # 向量数据库配置
     VECTOR_DB_PATH: str = "./data/vector_db"  # 向量数据库持久化目录

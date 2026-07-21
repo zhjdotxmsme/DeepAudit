@@ -57,6 +57,10 @@ services:
       - SANDBOX_ENABLED=true
       - SANDBOX_IMAGE=deepaudit/sandbox:latest  # 使用本地构建的沙箱镜像
       - DEEPAUDIT_SKILLS_DIR=/app/skills  # 容器内 skills 目录（挂载自 ./skills）
+      # 嵌入模型: 使用本地 Ollama,无需外部 API
+      - EMBEDDING_PROVIDER=ollama
+      - EMBEDDING_MODEL=nomic-embed-text
+      - EMBEDDING_BASE_URL=http://ollama-embed:11434
       # 禁用代理设置，防止容器内无法连接外部 API
       - HTTP_PROXY=
       - HTTPS_PROXY=
@@ -68,6 +72,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama-embed:
     # 开发模式：启用 --reload 热重载
     command: sh -c ".venv/bin/alembic upgrade head && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     networks:
@@ -132,6 +137,48 @@ services:
     restart: "no"
     command: echo "Sandbox image built successfully"
 
+  # =============================================
+  # 嵌入模型服务（本地 Ollama Embedding）
+  # =============================================
+  # 用于 RAG 代码语义检索,避免依赖外部 API
+  # 默认模型: nomic-embed-text (~274MB, CPU 即可运行)
+  # 自定义模型: 可在 .env 中设置 OLLAMA_EMBEDDING_MODEL
+  ollama-embed:
+    image: docker.m.daocloud.io/ollama/ollama:latest
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      set -e
+      MODEL="${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
+      echo "Starting Ollama server..."
+      ollama serve &
+      # 等待服务器就绪
+      for i in $(seq 1 30); do
+        if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+      echo "Pulling embedding model: $MODEL"
+      ollama pull "$MODEL" 2>&1 | tail -5
+      echo "Embedding model $MODEL ready"
+      wait
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - deepaudit-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
 networks:
   deepaudit-network:
     driver: bridge
@@ -141,3 +188,4 @@ volumes:
   backend_uploads:
   redis_data:
   cvelist_v5_data:  # cvelistV5 Git 镜像持久化，避免每次重建容器都重新 clone
+  ollama_data:      # Ollama 模型持久化，避免每次启动都重新下载

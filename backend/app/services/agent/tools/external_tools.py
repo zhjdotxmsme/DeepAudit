@@ -238,13 +238,25 @@ Semgrep 是业界领先的静态分析工具，支持 30+ 种编程语言。
         
         cmd = ["semgrep", "--json", "--quiet"]
         
+        # 🔥 修复: 支持逗号分隔的多个规则集,每个规则独立 --config
+        # React Agent 可能传 "p/security-audit,p/java,p/spring" 或空格分隔
+        rule_list = []
         if rules == "auto":
-            # 🔥 Fallback if user explicitly requests 'auto', but prefer security-audit
-            cmd.extend(["--config", "p/security-audit"])
-        elif rules.startswith("p/"):
-            cmd.extend(["--config", rules])
+            rule_list = ["p/security-audit"]
         else:
-            cmd.extend(["--config", rules])
+            # 统一分割: 逗号、空格或混合
+            import re as _re
+            raw = rules.strip()
+            # 先按逗号分,再按空白分,展平
+            parts = []
+            for seg in raw.split(","):
+                seg = seg.strip()
+                if seg:
+                    parts.extend(seg.split())
+            rule_list = [r for r in parts if r]
+        
+        for rule in rule_list:
+            cmd.extend(["--config", rule])
         
         if severity:
             cmd.extend(["--severity", severity])
@@ -1143,12 +1155,29 @@ Google 开源的漏洞扫描工具。
             
             stdout = result['stdout']
             
+            # 🔥 修复: 空 stdout 处理
+            if not stdout or not stdout.strip():
+                return ToolResult(
+                    success=True,
+                    data="📋 OSV-Scanner: 未找到可扫描的包文件（pom.xml / package-lock.json 等）",
+                    metadata={"findings_count": 0},
+                )
+            
             try:
                 results = json.loads(stdout)
-            except:
+            except json.JSONDecodeError:
                 if "no package sources found" in stdout.lower():
-                    return ToolResult(success=True, data="OSV-Scanner: 未找到可扫描的包文件")
-                return ToolResult(success=True, data=f"OSV-Scanner 输出:\n{stdout[:1000]}")
+                    return ToolResult(
+                        success=True,
+                        data="📋 OSV-Scanner: 未找到可扫描的包文件",
+                        metadata={"findings_count": 0},
+                    )
+                # 输出不是 JSON 但也不是错误,直接原样显示
+                return ToolResult(
+                    success=True,
+                    data=f"OSV-Scanner 输出:\n{stdout[:2000]}",
+                    metadata={"findings_count": 0},
+                )
             
             vulns = results.get("results", [])
             

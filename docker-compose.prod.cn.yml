@@ -57,6 +57,10 @@ services:
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - LLM_API_KEY=${LLM_API_KEY:-your-api-key-here}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
+      # 本地嵌入模型（Ollama）
+      - EMBEDDING_PROVIDER=ollama
+      - EMBEDDING_MODEL=nomic-embed-text
+      - EMBEDDING_BASE_URL=http://ollama-embed:11434
       # 禁用代理
       - HTTP_PROXY=
       - HTTPS_PROXY=
@@ -68,6 +72,7 @@ services:
         condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
+      ollama-embed:
     networks:
       - deepaudit-network
 
@@ -107,6 +112,36 @@ services:
     restart: "no"
     command: echo "Sandbox image ready"
 
+  # 本地嵌入模型服务（Ollama）- 国内加速版
+  ollama-embed:
+    image: docker.m.daocloud.io/ollama/ollama:latest
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      set -e
+      MODEL="${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
+      echo "Starting Ollama server..."
+      ollama serve &
+      for i in $(seq 1 30); do
+        if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then break; fi
+        sleep 1
+      done
+      echo "Pulling embedding model: $MODEL"
+      ollama pull "$MODEL" 2>&1 | tail -5
+      echo "Embedding model $MODEL ready"
+      wait
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - deepaudit-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
 networks:
   deepaudit-network:
     driver: bridge
@@ -115,3 +150,4 @@ volumes:
   postgres_data:
   backend_uploads:
   redis_data:
+  ollama_data:

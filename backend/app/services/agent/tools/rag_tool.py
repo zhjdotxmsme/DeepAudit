@@ -102,9 +102,22 @@ class RAGQueryTool(AgentTool):
             )
             
         except Exception as e:
+            error_msg = str(e)
+            # 🔥 给具体错误更友好的中文提示
+            if "404" in error_msg and "embeddings" in error_msg.lower():
+                return ToolResult(
+                    success=False,
+                    error=f"RAG 检索失败: Embedding API 返回 404.\n"
+                          f"原因: EMBEDDING_BASE_URL 指向的嵌入端点不存在.\n"
+                          f"修复: 检查 .env 中的 EMBEDDING_BASE_URL / EMBEDDING_PROVIDER 配置.\n"
+                          f"  - 如果使用 DeepSeek: 它不支持 embeddings,建议换 Ollama 或用 OpenAI 兼容嵌入模型\n"
+                          f"  - 如果使用 Ollama: 确保拉取了嵌入模型如 nomic-embed-text\n"
+                          f"  - 如果使用中转站: 确认中转站支持 /v1/embeddings 端点\n"
+                          f"错误: {error_msg[:200]}",
+                )
             return ToolResult(
                 success=False,
-                error=f"RAG 检索失败: {str(e)}",
+                error=f"RAG 检索失败: {error_msg[:500]}",
             )
 
 
