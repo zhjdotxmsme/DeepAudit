@@ -50,6 +50,11 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # 复制 Nginx 配置 (包含 SSE 反向代理配置)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# 修复 nginx:alpine 1.27+ 非 root master 进程写 /run/nginx.pid 权限问题
+# 将 PID 文件重定向到 /tmp，并授权 nginx 用户可写关键目录
+RUN sed -i 's|/run/nginx.pid|/tmp/nginx.pid|g' /etc/nginx/nginx.conf && \
+    chown -R nginx:nginx /var/cache/nginx /var/log/nginx /tmp /usr/share/nginx/html /etc/nginx/conf.d
+
 # 复制启动脚本
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh

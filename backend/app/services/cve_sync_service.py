@@ -4,9 +4,13 @@ CVE 同步服务
 """
 
 import asyncio
+import json
 import logging
+import os
+import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from pathlib import Path
+from typing import List, Dict, Any, Optional, AsyncIterator
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +18,11 @@ from sqlalchemy.future import select
 from sqlalchemy import update
 
 from app.models.cve_knowledge import CVEKnowledge, CVESyncLog
+
+try:
+    from app.core.config import settings as _settings
+except Exception:  # pragma: no cover - 允许无 settings 时使用默认值
+    _settings = None
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +164,278 @@ class OSVClient:
             logger.error(f"OSV API request failed for {ecosystem}/{package_name}: {e}")
             return []
 
+    async def fetch_modified_ids(
+        self, ecosystem: str
+    ) -> List[Dict[str, str]]:
+        """
+        获取指定生态系统的 modified_id.csv
+
+        Args:
+            ecosystem: OSV 生态系统名称 (Maven, npm, PyPI, Go, NuGet, crates.io, RubyGems, Packagist)
+
+        Returns:
+            List of {"id": str, "modified_time": str} sorted by modified_time descending
+        """
+        client = await self._get_client()
+        url = f"https://osv-vulnerabilities.storage.googleapis.com/{ecosystem}/modified_id.csv"
+
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            lines = response.text.strip().split("\n")
+            result = []
+            for line in lines:
+                if not line.strip():
+                    continue
+                # CSV format: id,modified_time (no header, ISO 8601 timestamps)
+                parts = line.split(",", 1)
+                if len(parts) == 2:
+                    result.append({
+                        "id": parts[0].strip(),
+                        "modified_time": parts[1].strip(),
+                    })
+            # Sort by modified_time descending (newest first)
+            result.sort(key=lambda x: x["modified_time"], reverse=True)
+            return result
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.warning(f"No modified_id.csv found for ecosystem: {ecosystem}")
+                return []
+            logger.error(f"OSV storage HTTP error for {ecosystem}: {e.response.status_code}")
+            return []
+        except Exception as e:
+            logger.error(f"Failed to fetch modified_ids for {ecosystem}: {e}")
+            return []
+
+    async def query_batch(
+        self, vuln_ids: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        批量查询漏洞详情
+
+        Args:
+            vuln_ids: 漏洞 ID 列表（最多 1000 条）
+
+        Returns:
+            漏洞详情列表
+        """
+        if not vuln_ids:
+            return []
+
+        client = await self._get_client()
+        url = f"{self.BASE_URL}/querybatch"
+
+        payload = {"queries": [{"id": vid} for vid in vuln_ids]}
+
+        try:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("vulns", [])
+        except Exception as e:
+            logger.error(f"OSV querybatch failed: {e}")
+            return []
+
+    async def get_vuln_detail(self, vuln_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取单个漏洞详情
+
+        Args:
+            vuln_id: 漏洞 ID
+
+        Returns:
+            漏洞详情字典，未找到返回 None
+        """
+        client = await self._get_client()
+        url = f"{self.BASE_URL}/vulns/{vuln_id}"
+
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.warning(f"Vulnerability not found: {vuln_id}")
+                return None
+            logger.error(f"OSV vulns HTTP error for {vuln_id}: {e.response.status_code}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get vuln detail for {vuln_id}: {e}")
+            return None
+
+    async def close(self):
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+
+
+class CVEProjectV5Client:
+    """CVEProject cvelistV5 本地 Git 镜像客户端
+
+    支持通过 settings.CVELIST_V5_GIT_REPO 配置 GitHub 镜像地址（如 kkgithub / gitclone / ghproxy），
+    以便在国内网络受限或 NVD/OSV API 拉不动时，通过 git 直接拉取官方 CVE JSON 仓库作为兜底数据源。
+    """
+
+    # 默认地址（可被 settings.CVELIST_V5_GIT_REPO 覆盖）
+    DEFAULT_GIT_REPO = "https://github.com/CVEProject/cvelistV5.git"
+    CVE_FILE_PATTERN = re.compile(r"^cves/\d{4}/.+/CVE-\d{4}-\d+\.json$")
+
+    def __init__(
+        self,
+        mirror_path: Optional[str] = None,
+        git_repo: Optional[str] = None,
+        clone_depth: Optional[int] = None,
+    ):
+        # 优先级：显式参数 > settings > 默认
+        resolved_repo = git_repo or getattr(_settings, "CVELIST_V5_GIT_REPO", None) or self.DEFAULT_GIT_REPO
+        resolved_path = mirror_path or getattr(_settings, "CVELIST_V5_MIRROR_PATH", None) or "data/cvelist-v5/"
+        resolved_depth = clone_depth if clone_depth is not None else getattr(_settings, "CVELIST_V5_CLONE_DEPTH", 1)
+
+        self.GIT_REPO = resolved_repo
+        self.clone_depth = max(1, int(resolved_depth or 1))
+
+        # Resolve relative path from project root (backend/app/services/ → project root)
+        project_root = Path(__file__).resolve().parent.parent.parent
+        self.mirror_path = str((project_root / resolved_path).resolve())
+        self._client: Optional[httpx.AsyncClient] = None
+
+        logger.info(
+            f"CVEProjectV5Client init: repo={self.GIT_REPO} depth={self.clone_depth} "
+            f"mirror={self.mirror_path}"
+        )
+
+    async def _check_git_installed(self) -> bool:
+        """Check if git is available"""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            return proc.returncode == 0
+        except FileNotFoundError:
+            return False
+
+    async def _init_mirror(self) -> str:
+        """
+        Clone or pull the mirror. Returns current HEAD hash.
+        Raises RuntimeError if git unavailable or operations fail.
+        """
+        if not await self._check_git_installed():
+            raise RuntimeError("git is not installed or not in PATH")
+
+        mirror_dir = Path(self.mirror_path)
+        hash_file = mirror_dir / ".last_hash"
+
+        if not mirror_dir.exists() or not (mirror_dir / ".git").exists():
+            # Fresh clone
+            mirror_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Cloning {self.GIT_REPO} (depth={self.clone_depth}) into {self.mirror_path}")
+            proc = await asyncio.create_subprocess_exec(
+                "git", "clone", "--depth", str(self.clone_depth), self.GIT_REPO, self.mirror_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                raise RuntimeError(f"git clone failed: {stderr.decode(errors='replace')}")
+        else:
+            # Pull latest
+            logger.info(f"Updating cvelistV5 mirror at {self.mirror_path}")
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", self.mirror_path, "fetch", "origin",
+                "--depth", str(self.clone_depth), "main",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            if proc.returncode != 0:
+                # Try origin/main fallback
+                proc = await asyncio.create_subprocess_exec(
+                    "git", "-C", self.mirror_path, "fetch", "origin",
+                    "--depth", str(self.clone_depth),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", self.mirror_path, "reset", "--hard", "origin/main",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                raise RuntimeError(f"git reset failed: {stderr.decode()}")
+
+        # Get HEAD hash
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", self.mirror_path, "rev-parse", "HEAD",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        head_hash = stdout.decode().strip()
+
+        # Save hash
+        hash_file.write_text(head_hash)
+        logger.info(f"cvelistV5 mirror at {head_hash}")
+        return head_hash
+
+    async def scan_cve_files(
+        self, since_hash: Optional[str] = None
+    ) -> AsyncIterator[tuple[str, str]]:
+        """
+        Walk mirror/cves/YEAR/ directories, yield (filepath, year) pairs.
+        If since_hash provided, use git diff --name-only to find changed files only.
+        """
+        mirror = Path(self.mirror_path)
+
+        if since_hash:
+            # Incremental: only files changed since last sync
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", self.mirror_path, "diff", "--name-only", since_hash, "HEAD",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            for line in stdout.decode().splitlines():
+                line = line.strip()
+                if self.CVE_FILE_PATTERN.match(line):
+                    year = line.split("/")[1]
+                    yield (str(mirror / line), year)
+        else:
+            # Full scan: walk cves/ directory tree
+            cves_dir = mirror / "cves"
+            if not cves_dir.exists():
+                return
+            for year_dir in sorted(cves_dir.iterdir()):
+                if not year_dir.is_dir() or not year_dir.name.isdigit():
+                    continue
+                year = year_dir.name
+                for quarter_dir in sorted(year_dir.iterdir()):
+                    if not quarter_dir.is_dir():
+                        continue
+                    for cve_file in sorted(quarter_dir.iterdir()):
+                        if cve_file.is_file() and cve_file.name.endswith(".json"):
+                            yield (str(cve_file), year)
+
+    def parse_cve_json(self, filepath: str) -> Optional[Dict[str, Any]]:
+        """Parse a single CVE 5.0 JSON file from disk"""
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Basic validation
+            if not isinstance(data, dict):
+                return None
+            metadata = data.get("cveMetadata", {})
+            if not metadata.get("cveId", "").startswith("CVE-"):
+                return None
+            return data
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            logger.warning(f"Failed to parse {filepath}: {e}")
+            return None
+
     async def close(self):
         if self._client and not self._client.is_closed:
             await self._client.aclose()
@@ -181,6 +462,11 @@ class CVESyncService:
 
     # NVD API 单次查询日期范围限制（120 天），实际使用 90 天窗口保留余量
     NVD_DATE_WINDOW_DAYS = 90
+
+    # OSV 生态系统名称映射
+    OSV_ECOSYSTEMS = [
+        "Maven", "npm", "PyPI", "Go", "NuGet", "crates.io", "RubyGems", "Packagist",
+    ]
 
     def __init__(self, db: AsyncSession, nvd_api_key: Optional[str] = None):
         self.db = db
@@ -330,6 +616,120 @@ class CVESyncService:
         )
         last = result.scalar_one_or_none()
         return last.end_date if last else None
+
+    async def _upsert_from_osv(
+        self,
+        vuln: Dict[str, Any],
+        ecosystem: Optional[str] = None,
+        package: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        解析并 upsert 单条 OSV 漏洞，返回 "new" / "updated" / None（失败）
+
+        Args:
+            vuln: OSV 漏洞详情字典
+            ecosystem: 生态系统名称
+            package: 包名称（可选）
+
+        Returns:
+            "new" / "updated" / None
+        """
+        try:
+            vuln_id = vuln.get("id", "")
+            if not vuln_id:
+                return None
+
+            # OSV ID 可能是 GHSA-xxx 或 CVE-xxx，优先使用 CVE ID
+            cve_id = vuln_id
+            for alias in vuln.get("aliases", []):
+                if alias.startswith("CVE-"):
+                    cve_id = alias
+                    break
+
+            # 解析描述
+            descriptions = vuln.get("descriptions", [])
+            description = ""
+            for desc in descriptions:
+                if desc.get("lang") == "en":
+                    description = desc.get("value", "")
+                    break
+            if not description and descriptions:
+                description = descriptions[0].get("value", "")
+
+            # 解析严重程度
+            severity = None
+            cvss_score = None
+            severity_list = vuln.get("severity", [])
+            if severity_list:
+                for sev in severity_list:
+                    if sev.get("type") == "CVSS_V3":
+                        cvss_score = sev.get("score")
+                        severity = sev.get("severity", "UNKNOWN")
+                        break
+
+            # 解析影响版本
+            affected_packages = []
+            for aff in vuln.get("affected", []):
+                pkg = {
+                    "ecosystem": aff.get("ecosystem", ecosystem),
+                    "name": aff.get("package", {}).get("name", ""),
+                    "version": aff.get("version"),
+                    "ranges": aff.get("ranges", []),
+                }
+                if package and not pkg["name"]:
+                    pkg["name"] = package
+                if pkg["name"]:
+                    affected_packages.append(pkg)
+
+            # 时间
+            published = vuln.get("published")
+            modified = vuln.get("modified")
+            published_at = (
+                datetime.fromisoformat(published.replace("Z", "+00:00"))
+                if published else None
+            )
+            modified_at = (
+                datetime.fromisoformat(modified.replace("Z", "+00:00"))
+                if modified else None
+            )
+
+            # 查询是否已存在
+            result = await self.db.execute(
+                select(CVEKnowledge).where(CVEKnowledge.cve_id == cve_id)
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # 合并 OSV 数据到 raw_data
+                existing.raw_data = {**existing.raw_data, "osv": vuln}
+                existing.title = description[:200] if description else existing.title
+                existing.description = description or existing.description
+                existing.severity = severity or existing.severity
+                existing.cvss_score = cvss_score or existing.cvss_score
+                existing.modified_at = modified_at or existing.modified_at
+                existing.sync_status = "active"
+                return "updated"
+            else:
+                cve = CVEKnowledge(
+                    cve_id=cve_id,
+                    title=description[:200] if description else cve_id,
+                    description=description,
+                    cvss_score=cvss_score,
+                    severity=severity or "UNKNOWN",
+                    affected_packages=affected_packages,
+                    source="osv",
+                    raw_data={"osv": vuln},
+                    published_at=published_at,
+                    modified_at=modified_at,
+                    sync_status="active",
+                    embedding_synced=0,
+                )
+                self.db.add(cve)
+                return "new"
+
+        except Exception as e:
+            logger.error(f"Failed to upsert OSV vuln {vuln.get('id', '')}: {e}")
+            return None
 
     async def sync_nvd_incremental(
         self,
@@ -856,6 +1256,141 @@ class CVESyncService:
         await self.db.commit()
         return sync_log
 
+    async def sync_osv_incremental(
+        self,
+        ecosystems: Optional[List[str]] = None,
+    ) -> CVESyncLog:
+        """
+        OSV 增量同步：基于 modified_id.csv 获取最近修改的漏洞
+
+        Args:
+            ecosystems: 指定生态系统列表，为 None 时使用 OSV_ECOSYSTEMS
+        """
+        if ecosystems is None:
+            ecosystems = self.OSV_ECOSYSTEMS
+
+        end_date = datetime.utcnow()
+        last_end = await self._last_successful_sync_end_date(source="osv_incremental")
+        if last_end:
+            if last_end.tzinfo is not None:
+                last_end = last_end.replace(tzinfo=None)
+            logger.info(f"OSV incremental: resume from last successful sync end_date={last_end}")
+        else:
+            # 首次同步，回退到 30 天前
+            last_end = end_date - timedelta(days=30)
+            logger.info(f"OSV incremental: no prior sync, falling back to 30 days ago")
+
+        sync_log = CVESyncLog(
+            source="osv_incremental",
+            status="running",
+            start_date=last_end,
+            end_date=end_date,
+        )
+        self.db.add(sync_log)
+        await self.db.flush()
+
+        total_new = 0
+        total_updated = 0
+        total_failed = 0
+        total_processed = 0
+
+        try:
+            for ecosystem in ecosystems:
+                logger.info(f"[OSV incremental] Processing ecosystem: {ecosystem}")
+
+                # 获取 modified_id.csv
+                modified_ids = await self.osv_client.fetch_modified_ids(ecosystem)
+                if not modified_ids:
+                    logger.info(f"[OSV incremental] No modified IDs for {ecosystem}, skipping")
+                    await asyncio.sleep(0.3)
+                    continue
+
+                # 过滤出自上次同步以来修改的 ID
+                filtered_ids = []
+                for item in modified_ids:
+                    try:
+                        mod_time = datetime.fromisoformat(item["modified_time"].replace("Z", "+00:00"))
+                        if mod_time.tzinfo is not None:
+                            mod_time = mod_time.replace(tzinfo=None)
+                        if mod_time > last_end:
+                            filtered_ids.append(item["id"])
+                    except Exception as e:
+                        logger.warning(f"Failed to parse modified_time for {item['id']}: {e}")
+                        continue
+
+                if not filtered_ids:
+                    logger.info(f"[OSV incremental] No new modifications for {ecosystem}")
+                    await asyncio.sleep(0.3)
+                    continue
+
+                logger.info(f"[OSV incremental] {ecosystem}: {len(filtered_ids)} modified since last sync")
+
+                # 分批查询，每批最多 1000 个 ID
+                batch_size = 1000
+                for i in range(0, len(filtered_ids), batch_size):
+                    batch_ids = filtered_ids[i:i + batch_size]
+
+                    # 批量查询漏洞详情
+                    vulns = await self.osv_client.query_batch(batch_ids)
+                    returned_ids = {v.get("id") for v in vulns}
+
+                    # 处理返回的漏洞
+                    for vuln in vulns:
+                        outcome = await self._upsert_from_osv(vuln, ecosystem=ecosystem)
+                        if outcome == "new":
+                            total_new += 1
+                        elif outcome == "updated":
+                            total_updated += 1
+                        else:
+                            total_failed += 1
+                        total_processed += 1
+
+                    # 对于批量查询未返回的漏洞，尝试逐个获取详情
+                    missing_ids = [vid for vid in batch_ids if vid not in returned_ids]
+                    for miss_id in missing_ids:
+                        vuln_detail = await self.osv_client.get_vuln_detail(miss_id)
+                        if vuln_detail:
+                            outcome = await self._upsert_from_osv(vuln_detail, ecosystem=ecosystem)
+                            if outcome == "new":
+                                total_new += 1
+                            elif outcome == "updated":
+                                total_updated += 1
+                            else:
+                                total_failed += 1
+                            total_processed += 1
+                        else:
+                            total_failed += 1
+                        # 添加小延迟避免过快请求
+                        await asyncio.sleep(0.1)
+
+                # 每个生态系统后添加延迟，避免给 OSV 存储造成压力
+                await asyncio.sleep(0.3)
+
+            await self.db.flush()
+
+            sync_log.status = "success"
+            sync_log.total_count = total_processed
+            sync_log.new_count = total_new
+            sync_log.updated_count = total_updated
+            sync_log.failed_count = total_failed
+
+            logger.info(
+                f"OSV incremental sync completed: {total_processed} processed, "
+                f"{total_new} new, {total_updated} updated, {total_failed} failed"
+            )
+
+        except Exception as e:
+            sync_log.status = "failed"
+            sync_log.error_message = str(e)
+            sync_log.total_count = total_processed
+            sync_log.new_count = total_new
+            sync_log.updated_count = total_updated
+            sync_log.failed_count = total_failed
+            logger.error(f"OSV incremental sync failed: {e}", exc_info=True)
+
+        await self.db.commit()
+        return sync_log
+
     async def get_cves_for_package(
         self,
         ecosystem: str,
@@ -893,6 +1428,246 @@ class CVESyncService:
         # 按 CVSS 分数排序
         cves = sorted(cves, key=lambda x: x.cvss_score or 0, reverse=True)
         return list(cves)
+
+    async def _parse_cvelist_v5_record(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Parse CVE 5.0 JSON format into CVEKnowledge-compatible dict"""
+        metadata = data.get("cveMetadata", {})
+        cna = data.get("containers", {}).get("cna", {})
+
+        cve_id = metadata.get("cveId")
+        if not cve_id:
+            return None
+
+        title = cna.get("title", "")
+        description = ""
+        if cna.get("descriptions"):
+            desc = next(
+                (d for d in cna["descriptions"] if d.get("lang") == "en"),
+                cna["descriptions"][0],
+            )
+            description = desc.get("value", "")
+
+        severity = "UNKNOWN"
+        cvss_score = None
+        if cna.get("metrics"):
+            for metric_group in cna["metrics"]:
+                if "cvssV3_1" in metric_group:
+                    severity = metric_group["cvssV3_1"].get("baseSeverity", "UNKNOWN")
+                    cvss_score = metric_group["cvssV3_1"].get("baseScore")
+                    break
+                elif "cvssV3_0" in metric_group:
+                    severity = metric_group["cvssV3_0"].get("baseSeverity", "UNKNOWN")
+                    cvss_score = metric_group["cvssV3_0"].get("baseScore")
+                    break
+
+        affected = []
+        for aff in cna.get("affected", []):
+            affected.append({
+                "vendor": aff.get("vendor", ""),
+                "product": aff.get("product", ""),
+                "packageName": aff.get("packageName", ""),
+                "versions": [
+                    {"version": v.get("version"), "status": v.get("status")}
+                    for v in aff.get("versions", [])
+                ],
+            })
+
+        # CWE
+        cwe_ids = []
+        for problem in cna.get("problemTypes", []):
+            for desc in problem.get("descriptions", []):
+                if desc.get("lang") == "en":
+                    cwe_id = desc.get("cweId", "")
+                    if cwe_id.startswith("CWE-"):
+                        cwe_ids.append(cwe_id)
+
+        # References
+        references = []
+        for ref in cna.get("references", []):
+            ref_url = ref.get("url", "")
+            if ref_url:
+                references.append({
+                    "url": ref_url,
+                    "tags": ref.get("tags", []),
+                })
+
+        # Timestamps
+        published_str = metadata.get("datePublished")
+        modified_str = metadata.get("dateUpdated")
+        published_at = None
+        modified_at = None
+        if published_str:
+            try:
+                published_at = datetime.fromisoformat(published_str.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        if modified_str:
+            try:
+                modified_at = datetime.fromisoformat(modified_str.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        return {
+            "cve_id": cve_id,
+            "title": title or description[:200] if description else cve_id,
+            "description": description,
+            "cvss_score": cvss_score,
+            "severity": severity,
+            "affected_packages": affected,
+            "cwe_ids": cwe_ids,
+            "references": references,
+            "source": "cvelist-v5",
+            "raw_data": data,
+            "published_at": published_at,
+            "modified_at": modified_at,
+        }
+
+    async def _upsert_from_cvelist_v5(
+        self, parsed: Dict[str, Any]
+    ) -> Optional[str]:
+        """
+        Upsert a parsed cvelistV5 record. Returns "new" / "updated" / None.
+        """
+        try:
+            cve_id = parsed["cve_id"]
+            result = await self.db.execute(
+                select(CVEKnowledge).where(CVEKnowledge.cve_id == cve_id)
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                existing.title = parsed["title"]
+                existing.description = parsed["description"]
+                existing.cvss_score = parsed.get("cvss_score")
+                existing.severity = parsed["severity"]
+                existing.affected_packages = parsed["affected_packages"]
+                existing.cwe_ids = parsed.get("cwe_ids", [])
+                existing.references = parsed.get("references", [])
+                existing.raw_data = parsed["raw_data"]
+                existing.modified_at = parsed.get("modified_at")
+                existing.sync_status = "active"
+                return "updated"
+            else:
+                cve = CVEKnowledge(
+                    cve_id=cve_id,
+                    title=parsed["title"],
+                    description=parsed["description"],
+                    cvss_score=parsed.get("cvss_score"),
+                    severity=parsed["severity"],
+                    affected_packages=parsed["affected_packages"],
+                    cwe_ids=parsed.get("cwe_ids", []),
+                    references=parsed.get("references", []),
+                    source=parsed["source"],
+                    raw_data=parsed["raw_data"],
+                    published_at=parsed.get("published_at"),
+                    modified_at=parsed.get("modified_at"),
+                    sync_status="active",
+                    embedding_synced=0,
+                )
+                self.db.add(cve)
+                return "new"
+        except Exception as e:
+            logger.error(f"Failed to upsert CVE from cvelistV5: {e}")
+            return None
+
+    async def sync_cvelist_v5(self, force_full: bool = False) -> CVESyncLog:
+        """
+        Sync CVE records from CVEProject/cvelistV5 Git mirror.
+
+        Args:
+            force_full: If True, re-sync all CVEs. If False, only sync changes since last run.
+        """
+        sync_log = CVESyncLog(
+            source="cvelist-v5",
+            status="running",
+        )
+        self.db.add(sync_log)
+        await self.db.flush()
+
+        total_new = 0
+        total_updated = 0
+        total_failed = 0
+        total_processed = 0
+
+        try:
+            client = CVEProjectV5Client()
+            head_hash = await client._init_mirror()
+
+            hash_file = Path(client.mirror_path) / ".last_hash"
+            last_hash = None
+            if not force_full and hash_file.exists():
+                last_hash = hash_file.read_text().strip() or None
+
+            if force_full:
+                logger.info("cvelistV5 full sync requested")
+            else:
+                logger.info(f"cvelistV5 incremental sync since {last_hash or 'initial'}")
+
+            year_stats: Dict[str, int] = {}
+            async for filepath, year in client.scan_cve_files(since_hash=last_hash if not force_full else None):
+                try:
+                    data = await asyncio.to_thread(client.parse_cve_json, filepath)
+                    if data is None:
+                        total_failed += 1
+                        continue
+
+                    parsed = await self._parse_cvelist_v5_record(data)
+                    if parsed is None:
+                        total_failed += 1
+                        continue
+
+                    outcome = await self._upsert_from_cvelist_v5(parsed)
+                    if outcome == "new":
+                        total_new += 1
+                    elif outcome == "updated":
+                        total_updated += 1
+                    else:
+                        total_failed += 1
+                    total_processed += 1
+
+                    # Track per-year progress
+                    year_stats[year] = year_stats.get(year, 0) + 1
+
+                    # Flush every 500 records to avoid long transactions
+                    if total_processed % 500 == 0:
+                        await self.db.flush()
+                        logger.info(
+                            f"cvelistV5 sync progress: {total_processed} processed "
+                            f"(new={total_new}, updated={total_updated}, year={year})"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Failed to process {filepath}: {e}")
+                    total_failed += 1
+
+            # Update hash file only on success
+            hash_file.write_text(head_hash)
+
+            await self.db.flush()
+            sync_log.status = "success"
+            sync_log.total_count = total_processed
+            sync_log.new_count = total_new
+            sync_log.updated_count = total_updated
+            sync_log.failed_count = total_failed
+
+            logger.info(
+                f"cvelistV5 sync completed: {total_processed} processed, "
+                f"{total_new} new, {total_updated} updated, {total_failed} failed "
+                f"(years={list(year_stats.keys())})"
+            )
+
+        except RuntimeError as e:
+            sync_log.status = "failed"
+            sync_log.error_message = str(e)
+            logger.error(f"cvelistV5 sync failed: {e}")
+
+        except Exception as e:
+            sync_log.status = "failed"
+            sync_log.error_message = str(e)
+            logger.error(f"cvelistV5 sync failed: {e}", exc_info=True)
+
+        await self.db.commit()
+        return sync_log
 
     async def close(self):
         await self.nvd_client.close()

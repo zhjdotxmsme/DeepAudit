@@ -9,6 +9,8 @@ CSRF = KnowledgeDocument(
     title="跨站请求伪造 (CSRF)",
     category=KnowledgeCategory.VULNERABILITY,
     tags=["csrf", "cross-site", "request-forgery", "state-changing"],
+    cwe_ids=["CWE-352"],
+    owasp_ids=["A01:2021"],
     content="""
 # 跨站请求伪造 (CSRF)
 

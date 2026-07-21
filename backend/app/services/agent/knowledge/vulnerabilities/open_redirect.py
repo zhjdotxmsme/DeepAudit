@@ -9,6 +9,8 @@ OPEN_REDIRECT = KnowledgeDocument(
     title="开放重定向",
     category=KnowledgeCategory.VULNERABILITY,
     tags=["open-redirect", "url", "phishing", "unvalidated-redirect"],
+    cwe_ids=["CWE-601"],
+    owasp_ids=["A01:2021"],
     content="""
 # 开放重定向漏洞
 

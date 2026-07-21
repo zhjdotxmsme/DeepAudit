@@ -89,13 +89,6 @@ class AuditRule(Base):
     # 参考链接（如CWE、OWASP链接）
     reference_url = Column(String(500), nullable=True)
 
-    # 技能与 CVE enrichment 配置（规则级覆盖规则集级）
-    skill_names = Column(Text, nullable=True)
-    enable_skill_enrichment = Column(Boolean, default=False)
-    cve_min_severity = Column(String(20), default="HIGH")
-    cve_sources = Column(Text, nullable=True)
-    enable_cve_enrichment = Column(Boolean, default=False)
-
     # 是否启用
     enabled = Column(Boolean, default=True)
 

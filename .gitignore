@@ -10,6 +10,10 @@ dist/
 build/
 *.tsbuildinfo
 
+# Large generated artifacts
+cve_v5/
+skills/skills.zip
+
 # Environment variables
 .env
 .env.local

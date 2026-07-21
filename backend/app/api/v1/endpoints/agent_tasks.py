@@ -555,10 +555,10 @@ async def _execute_agent_task(task_id: str):
             
             # 🔥 Audit instructions (rules of engagement) — Strix-style --instruction-file
             # 支持两种来源:
-            #   1. scan_config.audit_instructions: 直接嵌入的文本
-            #   2. scan_config.audit_instruction_file: 相对 project_root 的文件路径
+            #   1. agent_config.audit_instructions: 直接嵌入的文本
+            #   2. agent_config.audit_instruction_file: 相对 project_root 的文件路径
             audit_instructions = ""
-            scan_cfg = task.scan_config or {}
+            scan_cfg = task.agent_config or {}
             inline_inst = scan_cfg.get("audit_instructions")
             if isinstance(inline_inst, str) and inline_inst.strip():
                 audit_instructions = inline_inst.strip()

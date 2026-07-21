@@ -9,6 +9,8 @@ BUSINESS_LOGIC = KnowledgeDocument(
     title="业务逻辑漏洞",
     category=KnowledgeCategory.VULNERABILITY,
     tags=["business-logic", "logic-flaw", "workflow", "abuse"],
+    cwe_ids=["CWE-840"],
+    owasp_ids=["A01:2021"],
     content="""
 # 业务逻辑漏洞
 
@@ -137,6 +139,8 @@ RATE_LIMITING = KnowledgeDocument(
     title="速率限制缺失",
     category=KnowledgeCategory.VULNERABILITY,
     tags=["rate-limiting", "brute-force", "dos", "enumeration"],
+    cwe_ids=["CWE-770"],
+    owasp_ids=["A04:2021"],
     content="""
 # 速率限制缺失
 

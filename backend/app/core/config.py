@@ -122,6 +122,17 @@ class Settings(BaseSettings):
     RAG_CHUNK_OVERLAP: int = 50  # 代码块重叠（Token）
     RAG_TOP_K: int = 10  # 检索返回数量
 
+    # CVE cvelistV5 Git 兜底同步配置
+    # NVD/OSV API 拉不动时，直接从 CVEProject 官方 Git 仓库拉全量 CVE JSON
+    # 国内环境推荐镜像:
+    #   - https://kkgithub.com/CVEProject/cvelistV5.git
+    #   - https://gitclone.com/github.com/CVEProject/cvelistV5.git
+    #   - https://ghproxy.com/https://github.com/CVEProject/cvelistV5.git
+    CVELIST_V5_GIT_REPO: str = "https://github.com/CVEProject/cvelistV5.git"
+    CVELIST_V5_MIRROR_PATH: str = "data/cvelist-v5"  # 相对 backend/ 根目录
+    CVELIST_V5_CLONE_DEPTH: int = 1  # 浅克隆深度，减小仓库体积（3-5GB → 几百MB）
+    CVELIST_V5_GIT_TIMEOUT: int = 3600  # git clone/fetch 超时（秒）
+
     class Config:
         case_sensitive = True
         env_file = ".env"
