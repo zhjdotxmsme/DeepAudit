@@ -173,8 +173,8 @@ services:
       - "11434:11434"
     networks:
       - deepaudit-network
-        reservations:
-          memory: 512M
+    reservations:
+      memory: 512M
 
 networks:
   deepaudit-network:
