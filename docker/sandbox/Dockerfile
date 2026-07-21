@@ -30,18 +30,20 @@ RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
     cmake \
     clang \
     llvm \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 Node.js (用于 JavaScript/TypeScript 代码执行 和 npm audit)
-# 直接从 USTC 镜像安装 nodesource 源,绕过 setup_20.x 脚本(该脚本在 USTC 拉的是 N|Solid)
+# 从 USTC 镜像下载预编译二进制,绕过 apt nodesource 源
+# (nodesource 新仓库用 nodistro 不支持 bullseye,且 USTC setup 脚本是 N|Solid)
 RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-      | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://mirrors.ustc.edu.cn/nodesource/deb/node_20.x bullseye main" \
-      > /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && apt-get install -y nodejs && \
+    NODE_VERSION=20.18.0 && \
+    # 清除可能残留的旧 nodesource 源（来自缓存层）
+    rm -f /etc/apt/sources.list.d/nodesource.list && \
+    curl -fsSL "https://mirrors.ustc.edu.cn/node/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+      | tar -xJ -C /usr/local --strip-components=1 && \
     npm config set registry https://registry.npmmirror.com && \
-    rm -rf /var/lib/apt/lists/* /usr/share/keyrings/nodesource.gpg
+    node --version && npm --version
 
 # 安装 Go (使用阿里云镜像)
 ENV PATH=$PATH:/usr/local/go/bin
