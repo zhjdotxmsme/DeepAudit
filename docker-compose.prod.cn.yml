@@ -61,6 +61,8 @@ services:
       - EMBEDDING_PROVIDER=ollama
       - EMBEDDING_MODEL=nomic-embed-text
       - EMBEDDING_BASE_URL=http://ollama-embed:11434
+      # PyPI 镜像
+      - UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/
       # 禁用代理
       - HTTP_PROXY=
       - HTTPS_PROXY=

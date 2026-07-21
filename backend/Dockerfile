@@ -45,7 +45,8 @@ ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/
 COPY pyproject.toml uv.lock README.md ./
 
 # 安装 Python 依赖到虚拟环境
-RUN uv sync --frozen --no-dev
+# --index-url 强制从镜像下载（uv.lock 里硬编码了官方 URL，--frozen 不走 UV_INDEX_URL）
+RUN uv sync --frozen --no-dev --index-url https://pypi.tuna.tsinghua.edu.cn/simple/
 
 # ============================================
 # 多阶段构建 - 运行阶段
