@@ -140,28 +140,29 @@ services:
   # =============================================
   # 嵌入模型服务（本地 Ollama Embedding）
   # =============================================
-  # 用于 RAG 代码语义检索,避免依赖外部 API
+  # 用于 RAG 代码语义检索,无需外部 API
+  # ⚠️ 使用 $$ 转义 bash 变量,避免 Docker Compose 插值
   # 默认模型: nomic-embed-text (~274MB, CPU 即可运行)
-  # 自定义模型: 可在 .env 中设置 OLLAMA_EMBEDDING_MODEL
+  # 自定义模型: 在 .env 中加 OLLAMA_EMBEDDING_MODEL=xxx
   ollama-embed:
     image: docker.m.daocloud.io/ollama/ollama:latest
     restart: unless-stopped
     entrypoint: ["/bin/sh", "-c"]
     command: |
       set -e
-      MODEL="${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
+      MODEL="$${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
       echo "Starting Ollama server..."
       ollama serve &
-      # 等待服务器就绪
-      for i in $(seq 1 30); do
-        if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-          break
-        fi
+      # 等待服务器启动 (seq 在 Alpine 不可用,用 while 代替)
+      i=0
+      while [ $i -le 30 ]; do
+        if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then break; fi
         sleep 1
+        i=$((i+1))
       done
-      echo "Pulling embedding model: $MODEL"
-      ollama pull "$MODEL" 2>&1 | tail -5
-      echo "Embedding model $MODEL ready"
+      echo "Pulling embedding model: $${MODEL}"
+      ollama pull "$${MODEL}" 2>&1 | tail -5
+      echo "Embedding model $${MODEL} ready"
       wait
     environment:
       - OLLAMA_HOST=0.0.0.0
@@ -172,10 +173,6 @@ services:
       - "11434:11434"
     networks:
       - deepaudit-network
-    deploy:
-      resources:
-        limits:
-          memory: 2G
         reservations:
           memory: 512M
 

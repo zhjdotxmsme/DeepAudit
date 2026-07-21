@@ -121,16 +121,18 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command: |
       set -e
-      MODEL="${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
+      MODEL="$${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
       echo "Starting Ollama server..."
       ollama serve &
-      for i in $(seq 1 30); do
+      i=0
+      while [ $i -le 30 ]; do
         if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then break; fi
         sleep 1
+        i=$((i+1))
       done
-      echo "Pulling embedding model: $MODEL"
-      ollama pull "$MODEL" 2>&1 | tail -5
-      echo "Embedding model $MODEL ready"
+      echo "Pulling embedding model: $${MODEL}"
+      ollama pull "$${MODEL}" 2>&1 | tail -5
+      echo "Embedding model $${MODEL} ready"
       wait
     environment:
       - OLLAMA_HOST=0.0.0.0
