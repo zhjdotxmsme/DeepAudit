@@ -40,7 +40,8 @@ RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
     NODE_VERSION=20.18.0 && \
     # 清除可能残留的旧 nodesource 源（来自缓存层）
     rm -f /etc/apt/sources.list.d/nodesource.list && \
-    curl -fsSL "https://mirrors.ustc.edu.cn/node/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+    # 从 Node.js 官方 CDN 下载预编译二进制
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
       | tar -xJ -C /usr/local --strip-components=1 && \
     npm config set registry https://registry.npmmirror.com && \
     node --version && npm --version
