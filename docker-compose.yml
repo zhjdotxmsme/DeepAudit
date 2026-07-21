@@ -11,7 +11,7 @@ services:
   # =============================================
 
   db:
-    image: postgres:15-alpine
+    image: docker.m.daocloud.io/postgres:15-alpine
     restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -108,7 +108,7 @@ services:
 
   # Redis (Agent 任务队列 - 必须)
   redis:
-    image: redis:7-alpine
+    image: docker.m.daocloud.io/redis:7-alpine
     restart: unless-stopped
     ports:
       - "6379:6379"

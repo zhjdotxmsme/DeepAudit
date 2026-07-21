@@ -9,7 +9,7 @@
 
 services:
   db:
-    image: postgres:15-alpine
+    image: docker.m.daocloud.io/postgres:15-alpine
     restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -26,7 +26,7 @@ services:
       - deepaudit-network
 
   redis:
-    image: redis:7-alpine
+    image: docker.m.daocloud.io/redis:7-alpine
     restart: unless-stopped
     volumes:
       - redis_data:/data

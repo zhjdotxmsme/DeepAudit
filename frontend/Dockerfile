@@ -3,7 +3,7 @@
 # =============================================
 # 使用 Nginx 提供静态文件和反向代理 (支持 SSE 流式传输)
 
-FROM node:20-slim AS builder
+FROM docker.m.daocloud.io/node:20-slim AS builder
 
 WORKDIR /app
 
@@ -42,7 +42,7 @@ RUN pnpm build
 # =============================================
 # 生产镜像 - 使用 Nginx (支持 SSE 反向代理)
 # =============================================
-FROM nginx:alpine
+FROM docker.m.daocloud.io/nginx:alpine
 
 # 复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html

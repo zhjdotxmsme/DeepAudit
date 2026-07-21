@@ -35,7 +35,8 @@ RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
 # 安装 Node.js (用于 JavaScript/TypeScript 代码执行 和 npm audit)
 # 使用淘宝/阿里云镜像加速
 RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    curl -fsSL https://mirrors.ustc.edu.cn/nodesource/deb/setup_20.x | bash - \
+    && sed -i 's|deb.nodesource.com|mirrors.ustc.edu.cn/nodesource/deb|g' /etc/apt/sources.list.d/nodesource.list \
     && apt-get install -y nodejs \
     && npm config set registry https://registry.npmmirror.com \
     && rm -rf /var/lib/apt/lists/*

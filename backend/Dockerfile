@@ -1,7 +1,7 @@
 # ============================================
 # 多阶段构建 - 构建阶段
 # ============================================
-FROM python:3.12-slim AS builder
+FROM docker.m.daocloud.io/python:3.12-slim AS builder
 
 WORKDIR /app
 
@@ -35,11 +35,11 @@ RUN apt-get update && \
         libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# 安装 uv（使用南京大学 GHCR 镜像）
+COPY --from=ghcr.nju.edu.cn/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# 配置 uv 使用官方 PyPI（国内镜像不稳定时使用）
-ENV UV_INDEX_URL=https://pypi.org/simple/
+# 配置 uv 使用清华 PyPI 镜像（国内加速）
+ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/
 
 # 复制依赖文件
 COPY pyproject.toml uv.lock README.md ./
@@ -50,7 +50,7 @@ RUN uv sync --frozen --no-dev
 # ============================================
 # 多阶段构建 - 运行阶段
 # ============================================
-FROM python:3.12-slim AS runtime
+FROM docker.m.daocloud.io/python:3.12-slim AS runtime
 
 WORKDIR /app
 
