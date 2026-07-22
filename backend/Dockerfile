@@ -45,8 +45,9 @@ ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/
 COPY pyproject.toml uv.lock README.md ./
 
 # 安装 Python 依赖到虚拟环境
-# --index-url 强制从镜像下载（uv.lock 里硬编码了官方 URL，--frozen 不走 UV_INDEX_URL）
-RUN uv sync --frozen --no-dev --index-url https://pypi.tuna.tsinghua.edu.cn/simple/
+# 先覆盖 lock 文件中的官方源为清华镜像，再执行 frozen sync
+RUN sed -i 's|https://pypi.org/simple|https://pypi.tuna.tsinghua.edu.cn/simple|g' uv.lock && \
+    uv sync --frozen --no-dev
 
 # ============================================
 # 多阶段构建 - 运行阶段
@@ -100,10 +101,16 @@ RUN apt-get update && \
 
 # 从构建阶段复制虚拟环境和 uv
 COPY --from=builder /app/.venv /app/.venv
+
+# 先复制启动脚本和配置（变动少）
+COPY docker-entrypoint.sh .
 COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
 
-# 复制应用代码
-COPY . .
+# 最后复制应用代码（变动最频繁）
+COPY app/ app/
+COPY tests/ tests/
+COPY scripts/ scripts/
+COPY pyproject.toml uv.lock README.md ./
 
 # 创建上传目录并设置启动脚本权限
 RUN mkdir -p /app/uploads/zip_files && \

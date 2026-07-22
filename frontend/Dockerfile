@@ -17,18 +17,17 @@ ENV ALL_PROXY=""
 ENV no_proxy="*"
 ENV NO_PROXY="*"
 
-# 配置国内 npm 镜像源
-RUN npm config set registry https://registry.npmmirror.com && \
-    npm install -g pnpm && \
-    pnpm config set registry https://registry.npmmirror.com
+# 使用 corepack 启用 pnpm（避免重复全局安装），配置国内镜像源
+RUN corepack enable && \
+    corepack prepare pnpm@latest --activate && \
+    pnpm config set registry https://registry.npmmirror.com && \
+    pnpm config set store-dir /tmp/.pnpm-store
 
 # 复制依赖文件
 COPY package.json pnpm-lock.yaml ./
 
-# 增加网络超时设置和并发数限制，防止 ARM 架构构建卡死
-RUN pnpm config set network-timeout 300000 && \
-    pnpm config set fetch-retries 5 && \
-    pnpm install --no-frozen-lockfile --network-concurrency 1
+# 安装依赖 - 冻结 lockfile 保证构建确定性，利用离线缓存
+RUN pnpm install --frozen-lockfile --prefer-offline
 
 # 复制源代码
 COPY . .

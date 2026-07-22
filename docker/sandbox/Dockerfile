@@ -7,9 +7,7 @@ FROM docker.m.daocloud.io/python:3.11-bullseye
 LABEL maintainer="XCodeReviewer Team"
 LABEL description="Secure sandbox environment for vulnerability verification and security scanning"
 
-# 安装基本工具
-# 安装基本工具
-# 使用阿里云镜像加速 apt
+# 安装基本工具 - 使用阿里云镜像加速 apt
 RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
     sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
@@ -24,7 +22,7 @@ RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
     unzip \
     jq \
     php-cli \
-    openjdk-11-jdk-headless \
+    openjdk-11-jre-headless \
     ruby-full \
     build-essential \
     cmake \
@@ -54,6 +52,44 @@ RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
     tar -C /usr/local -xzf go.tar.gz && \
     rm go.tar.gz
 
+# ============================================
+# Python 安全工具安装（独立分层）
+# ============================================
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    requests==2.31.0 \
+    httpx==0.27.0 \
+    aiohttp==3.9.5 \
+    beautifulsoup4==4.12.3 \
+    lxml==5.2.1 \
+    pycryptodome==3.20.0 \
+    paramiko==3.4.0 \
+    pyjwt==2.8.0 \
+    python-jose==3.3.0 \
+    sqlparse==0.5.0 \
+    semgrep==1.70.0 \
+    bandit==1.7.8 \
+    safety==3.2.0
+
+# ============================================
+# 二进制安全工具安装（分层独立，国内镜像加速）
+# ============================================
+# Gitleaks - 使用 GitHub 代理加速
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    curl -L https://mirror.ghproxy.com/https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz -o gitleaks.tar.gz && \
+    tar -xzf gitleaks.tar.gz && \
+    mv gitleaks /usr/local/bin/ && \
+    rm gitleaks.tar.gz LICENSE README.md
+
+# TruffleHog - 使用 GitHub 代理加速
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    curl -sSfL https://mirror.ghproxy.com/https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+
+# OSV-Scanner - 使用 GitHub 代理加速
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
+    curl -L https://mirror.ghproxy.com/https://github.com/google/osv-scanner/releases/download/v1.6.2/osv-scanner_1.6.2_linux_amd64 -o /usr/local/bin/osv-scanner && \
+    chmod +x /usr/local/bin/osv-scanner
+
 # 安装 Rust (使用 rsproxy 镜像)
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -64,38 +100,6 @@ RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
     curl --proto '=https' --tlsv1.2 -sSf https://rsproxy.cn/rustup-init.sh | sh -s -- -y --default-toolchain stable --profile minimal && \
     chmod -R a+w /usr/local/cargo
 
-# 安装 Python 安全工具
-RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    requests \
-    httpx \
-    aiohttp \
-    beautifulsoup4 \
-    lxml \
-    pycryptodome \
-    paramiko \
-    pyjwt \
-    python-jose \
-    sqlparse \
-    semgrep \
-    bandit \
-    safety
-
-# 安装 Gitleaks
-RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    curl -L https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz -o gitleaks.tar.gz && \
-    tar -xzf gitleaks.tar.gz && \
-    mv gitleaks /usr/local/bin/ && \
-    rm gitleaks.tar.gz
-
-# 安装 TruffleHog
-RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
-
-# 安装 OSV-Scanner
-RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    curl -L https://github.com/google/osv-scanner/releases/download/v1.6.2/osv-scanner_1.6.2_linux_amd64 -o /usr/local/bin/osv-scanner && \
-    chmod +x /usr/local/bin/osv-scanner
 
 # 创建非 root 用户
 RUN groupadd -g 1000 sandbox && \
