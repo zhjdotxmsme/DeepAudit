@@ -149,23 +149,27 @@ services:
   ollama-embed:
     image: docker.m.daocloud.io/ollama/ollama:latest
     restart: unless-stopped
-    entrypoint: ["/bin/sh", "-c"]
-    command: |
-      set -e
-      MODEL="$${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
-      echo "Starting Ollama server..."
-      ollama serve &
-      # 等待服务器启动 (seq 在 Alpine 不可用,用 while 代替)
-      i=0
-      while [ $i -le 30 ]; do
-        if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then break; fi
-        sleep 1
-        i=$((i+1))
-      done
-      echo "Pulling embedding model: $${MODEL}"
-      ollama pull "$${MODEL}" 2>&1 | tail -5
-      echo "Embedding model $${MODEL} ready"
-      wait
+    # 🔥 简化启动脚本，避免 YAML 变量转义问题
+    entrypoint:
+      - "/bin/sh"
+      - "-c"
+      - |
+        set -e
+        MODEL="$${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
+        echo "Starting Ollama server..."
+        ollama serve &
+        PID=$$!
+        # 等待服务器启动
+        count=0
+        while [ $$count -le 30 ]; do
+          if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then break; fi
+          sleep 1
+          count=$$((count+1))
+        done
+        echo "Pulling embedding model: $$MODEL"
+        ollama pull "$$MODEL" 2>&1 | tail -5
+        echo "Embedding model $$MODEL ready"
+        wait $$PID
     environment:
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_KEEP_ALIVE=24h
@@ -175,9 +179,11 @@ services:
       - "11434:11434"
     networks:
       - deepaudit-network
-    reservations:
-      memory: 512M
-
+    # 🔥 deploy.reservations 是 Compose v3 正确格式
+    deploy:
+      resources:
+        reservations:
+          memory: 512M
 networks:
   deepaudit-network:
     driver: bridge
