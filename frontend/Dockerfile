@@ -18,8 +18,9 @@ ENV no_proxy="*"
 ENV NO_PROXY="*"
 
 # 使用 corepack 启用 pnpm（避免重复全局安装），配置国内镜像源
+# pnpm v11 需要 Node 22，锁定 v9 兼容 Node 20
 RUN corepack enable && \
-    corepack prepare pnpm@latest --activate && \
+    corepack prepare pnpm@9.12.3 --activate && \
     pnpm config set registry https://registry.npmmirror.com && \
     pnpm config set store-dir /tmp/.pnpm-store
 
