@@ -45,8 +45,13 @@ ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/
 COPY pyproject.toml uv.lock README.md ./
 
 # 安装 Python 依赖到虚拟环境
-# 先覆盖 lock 文件中的官方源为清华镜像，再执行 frozen sync
-RUN sed -i 's|https://pypi.org/simple|https://pypi.tuna.tsinghua.edu.cn/simple|g' uv.lock && \
+# 快速检查是否需要替换源，避免大文件 sed 超时
+RUN if grep -q "https://pypi.org/simple" uv.lock; then \
+        echo "Updating PyPI source in uv.lock..."; \
+        sed -i 's|https://pypi.org/simple|https://pypi.tuna.tsinghua.edu.cn/simple|g' uv.lock; \
+    else \
+        echo "uv.lock already using mirror source"; \
+    fi && \
     uv sync --frozen --no-dev
 
 # ============================================

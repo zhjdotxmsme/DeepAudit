@@ -74,21 +74,45 @@ RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
 # ============================================
 # 二进制安全工具安装（分层独立，国内镜像加速）
 # ============================================
-# Gitleaks - 使用 GitHub 代理加速
-RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    curl -L https://mirror.ghproxy.com/https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz -o gitleaks.tar.gz && \
-    tar -xzf gitleaks.tar.gz && \
-    mv gitleaks /usr/local/bin/ && \
-    rm gitleaks.tar.gz LICENSE README.md
+# Gitleaks - 多镜像自动 fallback
+RUN GITHUB_MIRRORS=("https://gh.ddlc.top" "https://ghproxy.net" "https://gh.api.99988866.xyz" "https://github.com") && \
+    for mirror in "$${GITHUB_MIRRORS[@]}"; do \
+        echo "Trying Gitleaks from: $$mirror"; \
+        if curl -L --connect-timeout 10 --max-time 120 \
+            "$mirror/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz" \
+            -o gitleaks.tar.gz; then \
+            tar -xzf gitleaks.tar.gz && \
+            mv gitleaks /usr/local/bin/ && \
+            rm -f gitleaks.tar.gz LICENSE README.md && \
+            echo "✅ Gitleaks installed from $$mirror"; \
+            break; \
+        fi; \
+    done
 
-# TruffleHog - 使用 GitHub 代理加速
-RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    curl -sSfL https://mirror.ghproxy.com/https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+# TruffleHog - 多镜像自动 fallback
+RUN GITHUB_MIRRORS=("https://gh.ddlc.top" "https://ghproxy.net" "https://gh.api.99988866.xyz" "https://github.com") && \
+    for mirror in "$${GITHUB_MIRRORS[@]}"; do \
+        echo "Trying TruffleHog from: $$mirror"; \
+        if curl -L --connect-timeout 10 --max-time 120 \
+            "$mirror/trufflesecurity/trufflehog/main/scripts/install.sh" \
+            | sh -s -- -b /usr/local/bin; then \
+            echo "✅ TruffleHog installed from $$mirror"; \
+            break; \
+        fi; \
+    done
 
-# OSV-Scanner - 使用 GitHub 代理加速
-RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY && \
-    curl -L https://mirror.ghproxy.com/https://github.com/google/osv-scanner/releases/download/v1.6.2/osv-scanner_1.6.2_linux_amd64 -o /usr/local/bin/osv-scanner && \
-    chmod +x /usr/local/bin/osv-scanner
+# OSV-Scanner - 多镜像自动 fallback
+RUN GITHUB_MIRRORS=("https://gh.ddlc.top" "https://ghproxy.net" "https://gh.api.99988866.xyz" "https://github.com") && \
+    for mirror in "$${GITHUB_MIRRORS[@]}"; do \
+        echo "Trying OSV-Scanner from: $$mirror"; \
+        if curl -L --connect-timeout 10 --max-time 120 \
+            "$mirror/google/osv-scanner/releases/download/v1.6.2/osv-scanner_1.6.2_linux_amd64" \
+            -o /usr/local/bin/osv-scanner; then \
+            chmod +x /usr/local/bin/osv-scanner && \
+            echo "✅ OSV-Scanner installed from $$mirror"; \
+            break; \
+        fi; \
+    done
 
 # 安装 Rust (使用 rsproxy 镜像)
 ENV RUSTUP_HOME=/usr/local/rustup \
