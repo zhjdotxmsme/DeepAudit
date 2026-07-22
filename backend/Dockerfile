@@ -97,19 +97,20 @@ RUN apt-get update && \
         libpangocairo-1.0-0 \
         libcairo2 \
         libgdk-pixbuf-2.0-0 \
-        libglib2.0-0 \
-        shared-mime-info \
-        fonts-noto-cjk \
     && fc-cache -fv \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
 # 从构建阶段复制虚拟环境和 uv
 COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
 
 # 先复制启动脚本和配置（变动少）
 COPY docker-entrypoint.sh .
-COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
+COPY alembic.ini .
+
+# 复制数据库迁移目录
+COPY alembic/ alembic/
 
 # 最后复制应用代码（变动最频繁）
 COPY app/ app/
