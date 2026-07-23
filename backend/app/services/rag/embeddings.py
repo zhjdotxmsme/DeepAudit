@@ -207,7 +207,10 @@ class OllamaEmbedding(EmbeddingProvider):
         model: str = "nomic-embed-text",
         dimension: Optional[int] = None,
     ):
-        self.base_url = base_url or "http://localhost:11434"
+        # 优先级: 显式传入 > 全局 settings.EMBEDDING_BASE_URL
+        # settings 默认值在 config.py 中定义（docker: http://ollama-embed:11434）
+        # 本地非 docker 用户在 .env 中覆盖即可
+        self.base_url = base_url or settings.EMBEDDING_BASE_URL
         self.model = model
         # 用户指定的维度优先，否则使用默认映射
         self._dimension = dimension if dimension else self.MODELS.get(model, 768)

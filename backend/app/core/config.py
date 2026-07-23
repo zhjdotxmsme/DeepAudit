@@ -94,7 +94,9 @@ class Settings(BaseSettings):
     EMBEDDING_PROVIDER: str = "ollama"  # openai, azure, ollama, cohere, huggingface, jina, qwen
     EMBEDDING_MODEL: str = "nomic-embed-text"  # Ollama 嵌入模型（nomic-embed-text / bge-m3 / mxbai-embed-large）
     EMBEDDING_API_KEY: Optional[str] = None  # 嵌入模型专用 API Key（留空则使用 LLM_API_KEY）
-    EMBEDDING_BASE_URL: Optional[str] = None  # 嵌入模型专用 Base URL（留空使用提供商默认地址，Ollama 默认 http://localhost:11434）
+    # 默认 Base URL 指向 docker-compose 中的 ollama-embed 服务
+    # 本地非 Docker 部署请在 .env 中覆盖: EMBEDDING_BASE_URL=http://localhost:11434
+    EMBEDDING_BASE_URL: str = "http://ollama-embed:11434"
     
     # 向量数据库配置
     VECTOR_DB_PATH: str = "./data/vector_db"  # 向量数据库持久化目录
